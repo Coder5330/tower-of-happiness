@@ -202,6 +202,7 @@ const levels = [
 ];
 
 let currentLevel = 0;
+let mode = 1;
 
 const level = levels[currentLevel];
 level.forEach((p) => {
@@ -505,12 +506,21 @@ function move() {
     player.mesh.position.y += dy;
     player.mesh.position.z += dz;
 
-    camera.rotation.y = player.angleY;
-    camera.rotation.x = player.angleX;
-
-    camera.position.x = player.mesh.position.x;
-    camera.position.y = player.mesh.position.y + player.height * 0.5;
-    camera.position.z = player.mesh.position.z;
+    if (mode === 1) {
+        camera.rotation.y = player.angleY;
+        camera.rotation.x = player.angleX;
+    
+        camera.position.x = player.mesh.position.x;
+        camera.position.y = player.mesh.position.y + player.height * 0.5;
+        camera.position.z = player.mesh.position.z;
+    } else {
+        camera.rotation.y = player.angleY;
+        camera.rotation.x = player.angleX;
+        
+        camera.position.x = player.mesh.position.x + 8;
+        camera.position.y = player.mesh.position.y + 4;
+        camera.position.z = player.mesh.position.z;
+    }
 }
 
 function animate() {
@@ -533,6 +543,15 @@ window.addEventListener('resize', () => {
 
 window.addEventListener('keydown', (e) => {
     keys[e.key] = true;
+    if (e.key === 'Tab') {
+        if (mode === 1) {
+            player.mesh.visible = true;
+            mode = 3;
+        } else if (mode === 3) {
+            player.mesh.visible = false;
+            mode = 1;
+        }
+    }
 });
 
 window.addEventListener('keyup', (e) => {
