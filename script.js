@@ -6,6 +6,16 @@ const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x87ceeb);
 scene.fog = new THREE.Fog(0x87ceeb, 20, 150);
 
+const hudCanvas = document.getElementById('hudCanvas');
+const hudCtx = hudCanvas.getContext('2d');
+
+function resizeHud() {
+    hudCanvas.width = window.innerWidth;
+    hudCanvas.height = window.innerHeight;
+}
+window.addEventListener('resize', resizeHud);
+resizeHud();
+
 const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
 camera.position.set(0, 0.4, 0);
 camera.rotation.order = 'YXZ';
@@ -248,6 +258,50 @@ for (let i = 0; i < randint(5, 30); i++) {
 
 const keys = {};
 
+function drawHeightHUD() {
+    hudCtx.clearRect(0, 0, hudCanvas.width, hudCanvas.height);
+
+    const barWidth = 25;
+    const barHeight = hudCanvas.height * 0.6;
+    const barX = 30;
+    const barY = (hudCanvas.height - barHeight) / 2;
+
+    const gradient = hudCtx.createLinearGradient(0, barY, 0, barY + barHeight);
+    
+    gradient.addColorStop(0, 'hsl(280, 100%, 50%)');
+    gradient.addColorStop(0.2, 'hsl(240, 100%, 50%)');
+    gradient.addColorStop(0.4, 'hsl(180, 100%, 50%)');
+    gradient.addColorStop(0.6, 'hsl(120, 100%, 50%)');
+    gradient.addColorStop(0.8, 'hsl(60, 100%, 50%)');
+    gradient.addColorStop(1, 'hsl(0, 100%, 50%)');
+
+    hudCtx.fillStyle = gradient;
+    hudCtx.fillRect(barX, barY, barWidth, barHeight);
+
+    hudCtx.strokeStyle = 'rgba(255, 255, 255, 0.8)';
+    hudCtx.lineWidth = 2;
+    hudCtx.strokeRect(barX, barY, barWidth, barHeight);
+
+    const currentHeight = Math.max(0, Math.min(player.mesh.position.y, TOWER_HEIGHT));
+    const progressRatio = currentHeight / TOWER_HEIGHT;
+
+    const indicatorY = (barY + barHeight) - (progressRatio * barHeight);
+
+    hudCtx.fillStyle = '#ffffff';
+    hudCtx.beginPath();
+    hudCtx.arc(barX + barWidth / 2, indicatorY, 8, 0, Math.PI * 2);
+    hudCtx.fill();
+    hudCtx.stroke();
+
+    hudCtx.fillStyle = '#ffffff';
+    hudCtx.font = 'bold 14px sans-serif';
+    hudCtx.shadowColor = 'rgba(0, 0, 0, 0.8)';
+    hudCtx.shadowBlur = 4;
+    hudCtx.fillText(`${Math.floor(player.mesh.position.y)}m`, barX + barWidth + 12, indicatorY + 5);
+    
+    hudCtx.shadowBlur = 0;
+}
+
 function collidebox(posA, sizeA, posB, sizeB) {
     const halfA = { x: sizeA.width / 2, y: sizeA.height / 2, z: sizeA.depth / 2 };
     const halfB = { x: sizeB.width / 2, y: sizeB.height / 2, z: sizeB.depth / 2 };
@@ -462,6 +516,7 @@ function animate() {
         player.mesh.position.set(-5, 5, 0);
     }
     renderer.render(scene, camera);
+    drawHeightHUD();
 }
 
 animate();
