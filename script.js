@@ -115,6 +115,7 @@ function addPlatform(p) {
         special: p.special,
         startPos: p.startPos,
         endPos: p.endPos,
+        moving: 0,
     });
 }
 
@@ -419,6 +420,9 @@ function move() {
             if (player.y_vel < 0) {
                 player.on_ground = true;
                 dy = objTop - (player.mesh.position.y - player.height / 2);
+                player.mesh.position.x = object.startPos.x + (object.endPos.x - object.startPos.x) * object.moveT;
+                player.mesh.position.y = object.startPos.y + (object.endPos.y - object.startPos.y) * object.moveT;
+                player.mesh.position.z = object.startPos.z + (object.endPos.z - object.startPos.z) * object.moveT;
             } else {
                 dy = objBottom - (player.mesh.position.y + player.height / 2);
             }
@@ -450,6 +454,7 @@ function move() {
             if (object.moveDir === undefined) object.moveDir = 1;
         
             object.moveT += 0.01 * object.moveDir;
+            object.moving = 0.01 * object.moveDir;
             
             if (object.moveT >= 1) {
                 object.moveT = 1;
