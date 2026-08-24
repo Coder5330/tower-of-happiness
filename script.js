@@ -49,6 +49,7 @@ const player = {
     angleY: 0,
     angleX: 0,
     dead: false,
+    ridingPlatform: null,
 };
 player.mesh.visible = false;
 player.mesh.position.set(-5, 5, 0);
@@ -370,6 +371,12 @@ function move() {
         z: -Math.sin(player.angleY)
     };
 
+    if (player.ridingPlatform && player.ridingPlatform.frameDelta) {
+        player.mesh.position.x += player.ridingPlatform.frameDelta.x;
+        player.mesh.position.y += player.ridingPlatform.frameDelta.y;
+        player.mesh.position.z += player.ridingPlatform.frameDelta.z;
+    }
+
     let dx = 0;
     let dy = 0;
     let dz = 0;
@@ -385,33 +392,34 @@ function move() {
     dy = player.y_vel;
 
     player.on_ground = false;
+    player.ridingPlatform = null;
 
     objects.forEach((object) => {
         const sizeA = { width: player.width, height: player.height, depth: player.depth };
-    
+
         let objTop, objBottom, hits;
-    
+
         if (object.shape === "sphere") {
             objTop = object.position.y + object.radius;
             objBottom = object.position.y - object.radius;
             hits = (pos) => collidesphere(object.position, object.radius, pos, sizeA);
-    
+
         } else if (object.shape === "cylinder") {
             objTop = object.position.y + object.radius;
             objBottom = object.position.y - object.radius;
             hits = (pos) => collidecylinder(object.position, object.radius, object.length, object.axis || 'z', pos, sizeA);
-    
+
         } else if (object.shape === "triangle") {
             objTop = object.position.y + object.height / 2;
             objBottom = object.position.y - object.height / 2;
             hits = (pos) => collidetriangle(object.position, object.size, object.height, pos, sizeA);
-    
+
         } else {
             objTop = object.position.y + object.height / 2;
             objBottom = object.position.y - object.height / 2;
             hits = (pos) => collidebox(pos, sizeA, object.position, { width: object.width, height: object.height, depth: object.depth });
         }
-    
+
         const newYPos = {
             x: player.mesh.position.x,
             y: player.mesh.position.y + dy,
@@ -421,17 +429,15 @@ function move() {
             if (player.y_vel < 0) {
                 player.on_ground = true;
                 dy = objTop - (player.mesh.position.y - player.height / 2);
-                if (object.startPos !== undefined && object.endPos !== undefined && object.moveT !== undefined) {
-                    player.mesh.position.x = object.startPos.x + (object.endPos.x - object.startPos.x) * object.moveT;
-                    player.mesh.position.y = object.startPos.y + (object.endPos.y - object.startPos.y) * object.moveT;
-                    player.mesh.position.z = object.startPos.z + (object.endPos.z - object.startPos.z) * object.moveT;
+                if (object.special === "moving") {
+                    player.ridingPlatform = object;
                 }
             } else {
                 dy = objBottom - (player.mesh.position.y + player.height / 2);
             }
             player.y_vel = 0;
         }
-    
+
         const newXPos = {
             x: player.mesh.position.x + dx,
             y: player.mesh.position.y,
@@ -440,7 +446,7 @@ function move() {
         if (hits(newXPos)) {
             dx = 0;
         }
-    
+
         const newZPos = {
             x: player.mesh.position.x,
             y: player.mesh.position.y,
@@ -455,10 +461,14 @@ function move() {
         if (object.special === "moving") {
             if (object.moveT === undefined) object.moveT = 0;
             if (object.moveDir === undefined) object.moveDir = 1;
-        
+
+            const prevX = object.mesh.position.x;
+            const prevY = object.mesh.position.y;
+            const prevZ = object.mesh.position.z;
+
             object.moveT += 0.01 * object.moveDir;
             object.moving = 0.01 * object.moveDir;
-            
+
             if (object.moveT >= 1) {
                 object.moveT = 1;
                 object.moveDir = -1;
@@ -466,17 +476,23 @@ function move() {
                 object.moveT = 0;
                 object.moveDir = 1;
             }
-        
+
             object.mesh.position.x = object.startPos.x + (object.endPos.x - object.startPos.x) * object.moveT;
             object.mesh.position.y = object.startPos.y + (object.endPos.y - object.startPos.y) * object.moveT;
             object.mesh.position.z = object.startPos.z + (object.endPos.z - object.startPos.z) * object.moveT;
+
+            object.frameDelta = {
+                x: object.mesh.position.x - prevX,
+                y: object.mesh.position.y - prevY,
+                z: object.mesh.position.z - prevZ,
+            };
         }
     });
 
     objects.forEach((object) => {
         if (object.special === "kill") {
             const new_player = {
-                pos: { 
+                pos: {
                     x: player.mesh.position.x + dx,
                     y: player.mesh.position.y + dy,
                     z: player.mesh.position.z + dz,
@@ -486,7 +502,7 @@ function move() {
                 depth: player.depth
             }
             const new_object = {
-                pos: { 
+                pos: {
                     x: object.position.x,
                     y: object.position.y,
                     z: object.position.z,
@@ -509,14 +525,14 @@ function move() {
     if (mode === 1) {
         camera.rotation.y = player.angleY;
         camera.rotation.x = player.angleX;
-    
+
         camera.position.x = player.mesh.position.x;
         camera.position.y = player.mesh.position.y + player.height * 0.5;
         camera.position.z = player.mesh.position.z;
     } else {
         camera.rotation.y = player.angleY;
         camera.rotation.x = player.angleX;
-        
+
         camera.position.x = player.mesh.position.x + 8;
         camera.position.y = player.mesh.position.y + 4;
         camera.position.z = player.mesh.position.z;
