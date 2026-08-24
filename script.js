@@ -450,8 +450,7 @@ function move() {
             if (object.moveDir === undefined) object.moveDir = 1;
         
             object.moveT += 0.01 * object.moveDir;
-            player.mesh.position.x += 0.01 * object.moveDir;
-        
+            
             if (object.moveT >= 1) {
                 object.moveT = 1;
                 object.moveDir = -1;
