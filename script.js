@@ -287,11 +287,9 @@ function drawHeightHUD() {
 
     const indicatorY = (barY + barHeight) - (progressRatio * barHeight);
 
-    hudCtx.fillStyle = '#ffffff';
-    hudCtx.beginPath();
-    hudCtx.arc(barX + barWidth / 2, indicatorY, 8, 0, Math.PI * 2);
-    hudCtx.fill();
-    hudCtx.stroke();
+    hudCtx.strokeStyle = '#ff0000';
+    hudCtx.lineWidth = 2;
+    hudCtx.strokeRect(barX - 2, indicatorY, barWidth + 4, 2);
 
     hudCtx.fillStyle = '#ffffff';
     hudCtx.font = 'bold 14px sans-serif';
