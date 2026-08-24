@@ -1,7 +1,6 @@
-
 const MOUSE_SENSITIVITY = 0.002;
 const TOWER_HEIGHT = 60;
-const GROUND_AREA = 40
+const GROUND_AREA = 40;
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x87ceeb);
@@ -192,6 +191,7 @@ const levels = [
 ];
 
 let currentLevel = 0;
+
 const level = levels[currentLevel];
 level.forEach((p) => {
     addPlatform(p);
