@@ -420,9 +420,11 @@ function move() {
             if (player.y_vel < 0) {
                 player.on_ground = true;
                 dy = objTop - (player.mesh.position.y - player.height / 2);
-                player.mesh.position.x = object.startPos.x + (object.endPos.x - object.startPos.x) * object.moveT;
-                player.mesh.position.y = object.startPos.y + (object.endPos.y - object.startPos.y) * object.moveT;
-                player.mesh.position.z = object.startPos.z + (object.endPos.z - object.startPos.z) * object.moveT;
+                if (object.startPos !== undefined && object.endPos !== undefined && object.moveT !== undefined) {
+                    player.mesh.position.x = object.startPos.x + (object.endPos.x - object.startPos.x) * object.moveT;
+                    player.mesh.position.y = object.startPos.y + (object.endPos.y - object.startPos.y) * object.moveT;
+                    player.mesh.position.z = object.startPos.z + (object.endPos.z - object.startPos.z) * object.moveT;
+                }
             } else {
                 dy = objBottom - (player.mesh.position.y + player.height / 2);
             }
