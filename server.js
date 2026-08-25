@@ -124,14 +124,40 @@ setInterval(() => {
             resolveMovement(player, objects, player.keys, otherPlayers);
         }
 
-        for (const [id, { player }] of players.entries()) {
-            const otherPlayers = [];
-            for (const [otherId, { player: op }] of players.entries()) {
-                if (otherId !== id) otherPlayers.push(op);
+        const PUSH_CHAIN_ITERATIONS = 6;
+        for (let iter = 0; iter < PUSH_CHAIN_ITERATIONS; iter++) {
+            const forwarded = new Map(); // player -> { x, z } to apply next iteration
+            for (const [id, { player }] of players.entries()) {
+                if (player.pushDelta.x === 0 && player.pushDelta.z === 0) continue;
+                const otherPlayers = [];
+                for (const [otherId, { player: op }] of players.entries()) {
+                    if (otherId !== id) otherPlayers.push(op);
+                }
+                const attempted = { x: player.pushDelta.x, z: player.pushDelta.z };
+                const result = resolvePush(player, attempted, objects, otherPlayers);
+                player.pendingDelta.x += result.x;
+                player.pendingDelta.z += result.z;
+
+                const blockedX = attempted.x - result.x;
+                const blockedZ = attempted.z - result.z;
+                if (result.blockedByX && blockedX !== 0) {
+                    const entry = forwarded.get(result.blockedByX) || { x: 0, z: 0 };
+                    entry.x += blockedX;
+                    forwarded.set(result.blockedByX, entry);
+                }
+                if (result.blockedByZ && blockedZ !== 0) {
+                    const entry = forwarded.get(result.blockedByZ) || { x: 0, z: 0 };
+                    entry.z += blockedZ;
+                    forwarded.set(result.blockedByZ, entry);
+                }
+
+                player.pushDelta.x = 0;
+                player.pushDelta.z = 0;
             }
-            const push = resolvePush(player, player.pushDelta, objects, otherPlayers);
-            player.pendingDelta.x += push.x;
-            player.pendingDelta.z += push.z;
+            for (const [targetPlayer, delta] of forwarded.entries()) {
+                targetPlayer.pushDelta.x += delta.x;
+                targetPlayer.pushDelta.z += delta.z;
+            }
         }
 
         advanceMovingPlatforms(objects);

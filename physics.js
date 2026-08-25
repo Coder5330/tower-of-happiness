@@ -126,6 +126,7 @@ function createPlayer() {
         ridingPlatform: null,
         pendingDelta: { x: 0, y: 0, z: 0 },
         pushDelta: { x: 0, z: 0 },
+        frameDelta: { x: 0, y: 0, z: 0 },
     };
 }
 
@@ -185,7 +186,8 @@ function resolveMovement(player, objects, keys, otherPlayers) {
 
         const newYPos = { x: player.position.x, y: player.position.y + dy0, z: player.position.z };
         if (hits(newYPos)) {
-            if (player.y_vel < 0 && (!object.isPlayer || object.position.y < player.position.y - 0.05)) {
+            const currentFoot = player.position.y - sizeA.height / 2;
+            if (player.y_vel < 0 && objTop <= currentFoot + 0.05) {
                 const candidateDy = objTop - (player.position.y - sizeA.height / 2);
                 if (bestLandDy === null || candidateDy > bestLandDy) {
                     bestLandDy = candidateDy;
@@ -216,6 +218,7 @@ function resolveMovement(player, objects, keys, otherPlayers) {
         player.on_ground = true;
         dy = bestLandDy;
         if (bestLandObject.special === "moving") player.ridingPlatform = bestLandObject;
+        else if (bestLandObject.isPlayer) player.ridingPlatform = bestLandObject.ref;
         player.y_vel = 0;
     } else if (bestCeilDy !== null) {
         dy = bestCeilDy;
@@ -227,13 +230,15 @@ function resolveMovement(player, objects, keys, otherPlayers) {
 
 function resolvePush(player, pushDelta, objects, otherPlayers) {
     let dx = pushDelta.x, dz = pushDelta.z;
-    if (dx === 0 && dz === 0) return { x: 0, z: 0 };
+    let blockedByX = null, blockedByZ = null;
+    if (dx === 0 && dz === 0) return { x: 0, z: 0, blockedByX, blockedByZ };
 
     const sizeA = PLAYER_SIZE;
     const solids = objects.filter((o) => o.special !== "kill");
     const others = otherPlayers.map((op) => ({
         position: op.position,
         width: PLAYER_SIZE.width, height: PLAYER_SIZE.height, depth: PLAYER_SIZE.depth,
+        isPlayer: true, ref: op,
     }));
     const collidables = solids.concat(others);
 
@@ -241,15 +246,15 @@ function resolvePush(player, pushDelta, objects, otherPlayers) {
         const hits = hitTestFor(object, sizeA);
         if (dx !== 0) {
             const newXPos = { x: player.position.x + dx, y: player.position.y, z: player.position.z };
-            if (hits(newXPos)) dx = 0;
+            if (hits(newXPos)) { if (object.isPlayer) blockedByX = object.ref; dx = 0; }
         }
         if (dz !== 0) {
             const newZPos = { x: player.position.x, y: player.position.y, z: player.position.z + dz };
-            if (hits(newZPos)) dz = 0;
+            if (hits(newZPos)) { if (object.isPlayer) blockedByZ = object.ref; dz = 0; }
         }
     }
 
-    return { x: dx, z: dz };
+    return { x: dx, z: dz, blockedByX, blockedByZ };
 }
 
 function applyPendingMove(player, objects) {
@@ -267,6 +272,7 @@ function applyPendingMove(player, objects) {
         player.y_vel = 0;
         player.on_ground = false;
         player.ridingPlatform = null;
+        player.frameDelta = { x: 0, y: 0, z: 0 };
         player.dead = false;
         return;
     }
@@ -274,6 +280,7 @@ function applyPendingMove(player, objects) {
     player.position.x += dx;
     player.position.y += dy;
     player.position.z += dz;
+    player.frameDelta = { x: dx, y: dy, z: dz };
 }
 
 module.exports = { buildObjects, advanceMovingPlatforms, createPlayer, resolveMovement, resolvePush, applyPendingMove };
