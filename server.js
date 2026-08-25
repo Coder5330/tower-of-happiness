@@ -2,7 +2,7 @@ const { WebSocketServer } = require('ws');
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
-const { buildObjects, advanceMovingPlatforms, createPlayer, resolveMovement, applyPendingMove } = require('./physics');
+const { buildObjects, advanceMovingPlatforms, createPlayer, resolveMovement, resolvePush, applyPendingMove } = require('./physics');
 const { level } = require('./levelData');
 
 const PORT = process.env.PORT || 8080;
@@ -124,9 +124,14 @@ setInterval(() => {
             resolveMovement(player, objects, player.keys, otherPlayers);
         }
 
-        for (const { player } of players.values()) {
-            player.pendingDelta.x += player.pushDelta.x;
-            player.pendingDelta.z += player.pushDelta.z;
+        for (const [id, { player }] of players.entries()) {
+            const otherPlayers = [];
+            for (const [otherId, { player: op }] of players.entries()) {
+                if (otherId !== id) otherPlayers.push(op);
+            }
+            const push = resolvePush(player, player.pushDelta, objects, otherPlayers);
+            player.pendingDelta.x += push.x;
+            player.pendingDelta.z += push.z;
         }
 
         advanceMovingPlatforms(objects);

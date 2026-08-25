@@ -106,9 +106,19 @@ function advanceMovingPlatforms(objects) {
     }
 }
 
+const SPAWN_JITTER = 1.5;
+
+function randomizedSpawnPosition() {
+    return {
+        x: SPAWN_POSITION.x + (Math.random() * 2 - 1) * SPAWN_JITTER,
+        y: SPAWN_POSITION.y,
+        z: SPAWN_POSITION.z + (Math.random() * 2 - 1) * SPAWN_JITTER,
+    };
+}
+
 function createPlayer() {
     return {
-        position: { ...SPAWN_POSITION },
+        position: randomizedSpawnPosition(),
         y_vel: 0,
         on_ground: true,
         angleY: 0,
@@ -156,6 +166,11 @@ function resolveMovement(player, objects, keys, otherPlayers) {
           })))
         : objects;
 
+    const dy0 = dy;
+    let bestLandDy = null;
+    let bestLandObject = null;
+    let bestCeilDy = null;
+
     for (const object of collidables) {
         let objTop, objBottom;
         if (object.shape === "sphere" || object.shape === "cylinder") {
@@ -168,16 +183,19 @@ function resolveMovement(player, objects, keys, otherPlayers) {
 
         const hits = hitTestFor(object, sizeA);
 
-        const newYPos = { x: player.position.x, y: player.position.y + dy, z: player.position.z };
+        const newYPos = { x: player.position.x, y: player.position.y + dy0, z: player.position.z };
         if (hits(newYPos)) {
             if (player.y_vel < 0 && (!object.isPlayer || object.position.y < player.position.y - 0.05)) {
-                player.on_ground = true;
-                dy = objTop - (player.position.y - sizeA.height / 2);
-                if (object.special === "moving") player.ridingPlatform = object;
-                player.y_vel = 0;
+                const candidateDy = objTop - (player.position.y - sizeA.height / 2);
+                if (bestLandDy === null || candidateDy > bestLandDy) {
+                    bestLandDy = candidateDy;
+                    bestLandObject = object;
+                }
             } else if (player.y_vel >= 0) {
-                dy = objBottom - (player.position.y + sizeA.height / 2);
-                player.y_vel = 0;
+                const candidateDy = objBottom - (player.position.y + sizeA.height / 2);
+                if (bestCeilDy === null || candidateDy < bestCeilDy) {
+                    bestCeilDy = candidateDy;
+                }
             }
         }
 
@@ -194,7 +212,44 @@ function resolveMovement(player, objects, keys, otherPlayers) {
         }
     }
 
+    if (bestLandDy !== null) {
+        player.on_ground = true;
+        dy = bestLandDy;
+        if (bestLandObject.special === "moving") player.ridingPlatform = bestLandObject;
+        player.y_vel = 0;
+    } else if (bestCeilDy !== null) {
+        dy = bestCeilDy;
+        player.y_vel = 0;
+    }
+
     player.pendingDelta = { x: dx, y: dy, z: dz };
+}
+
+function resolvePush(player, pushDelta, objects, otherPlayers) {
+    let dx = pushDelta.x, dz = pushDelta.z;
+    if (dx === 0 && dz === 0) return { x: 0, z: 0 };
+
+    const sizeA = PLAYER_SIZE;
+    const solids = objects.filter((o) => o.special !== "kill");
+    const others = otherPlayers.map((op) => ({
+        position: op.position,
+        width: PLAYER_SIZE.width, height: PLAYER_SIZE.height, depth: PLAYER_SIZE.depth,
+    }));
+    const collidables = solids.concat(others);
+
+    for (const object of collidables) {
+        const hits = hitTestFor(object, sizeA);
+        if (dx !== 0) {
+            const newXPos = { x: player.position.x + dx, y: player.position.y, z: player.position.z };
+            if (hits(newXPos)) dx = 0;
+        }
+        if (dz !== 0) {
+            const newZPos = { x: player.position.x, y: player.position.y, z: player.position.z + dz };
+            if (hits(newZPos)) dz = 0;
+        }
+    }
+
+    return { x: dx, z: dz };
 }
 
 function applyPendingMove(player, objects) {
@@ -208,7 +263,7 @@ function applyPendingMove(player, objects) {
     }
 
     if (player.dead) {
-        player.position = { ...SPAWN_POSITION };
+        player.position = randomizedSpawnPosition();
         player.y_vel = 0;
         player.on_ground = false;
         player.ridingPlatform = null;
@@ -221,4 +276,4 @@ function applyPendingMove(player, objects) {
     player.position.z += dz;
 }
 
-module.exports = { buildObjects, advanceMovingPlatforms, createPlayer, resolveMovement, applyPendingMove };
+module.exports = { buildObjects, advanceMovingPlatforms, createPlayer, resolveMovement, resolvePush, applyPendingMove };
