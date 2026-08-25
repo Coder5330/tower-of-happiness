@@ -1,6 +1,6 @@
 const { WebSocketServer } = require('ws');
 const { buildObjects, advanceMovingPlatforms, createPlayer, resolveMovement, applyPendingMove } = require('./physics');
-const { level } = require('./levelData');
+const { level } = require('./levels');
 
 const PORT = process.env.PORT || 8080;
 const TICK_HZ = 60;
