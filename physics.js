@@ -42,18 +42,47 @@ function collidetriangle(triPos, size, height, boxPos, boxSize) {
         return false;
     }
     const h = size * Math.sqrt(3) / 2;
-    const p1 = { x: triPos.x, z: triPos.z - (2 / 3) * h };
-    const p2 = { x: triPos.x - size / 2, z: triPos.z + (1 / 3) * h };
-    const p3 = { x: triPos.x + size / 2, z: triPos.z + (1 / 3) * h };
-    function sign(ax, az, bx, bz, cx, cz) {
-        return (ax - cx) * (bz - cz) - (bx - cx) * (az - cz);
+    const tri = [
+        { x: triPos.x, z: triPos.z - (2 / 3) * h },
+        { x: triPos.x - size / 2, z: triPos.z + (1 / 3) * h },
+        { x: triPos.x + size / 2, z: triPos.z + (1 / 3) * h },
+    ];
+    const hx = boxSize.width / 2, hz = boxSize.depth / 2;
+    const box = [
+        { x: boxPos.x - hx, z: boxPos.z - hz },
+        { x: boxPos.x + hx, z: boxPos.z - hz },
+        { x: boxPos.x + hx, z: boxPos.z + hz },
+        { x: boxPos.x - hx, z: boxPos.z + hz },
+    ];
+
+    function project(points, axisX, axisZ) {
+        let min = Infinity, max = -Infinity;
+        for (const p of points) {
+            const proj = p.x * axisX + p.z * axisZ;
+            if (proj < min) min = proj;
+            if (proj > max) max = proj;
+        }
+        return { min, max };
     }
-    const d1 = sign(boxPos.x, boxPos.z, p1.x, p1.z, p2.x, p2.z);
-    const d2 = sign(boxPos.x, boxPos.z, p2.x, p2.z, p3.x, p3.z);
-    const d3 = sign(boxPos.x, boxPos.z, p3.x, p3.z, p1.x, p1.z);
-    const hasNeg = (d1 < 0) || (d2 < 0) || (d3 < 0);
-    const hasPos = (d1 > 0) || (d2 > 0) || (d3 > 0);
-    return !(hasNeg && hasPos);
+
+    function overlapsOnAxis(axisX, axisZ) {
+        const a = project(tri, axisX, axisZ);
+        const b = project(box, axisX, axisZ);
+        return a.max >= b.min && b.max >= a.min;
+    }
+
+    // box's own axes (equivalent to plain AABB overlap on x and z)
+    if (!overlapsOnAxis(1, 0)) return false;
+    if (!overlapsOnAxis(0, 1)) return false;
+
+    // triangle edge normals
+    for (let i = 0; i < 3; i++) {
+        const p1 = tri[i], p2 = tri[(i + 1) % 3];
+        const edgeX = p2.x - p1.x, edgeZ = p2.z - p1.z;
+        if (!overlapsOnAxis(-edgeZ, edgeX)) return false;
+    }
+
+    return true;
 }
 
 function hitTestFor(object, sizeA) {
