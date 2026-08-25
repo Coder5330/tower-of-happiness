@@ -6,6 +6,8 @@ const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x87ceeb);
 scene.fog = new THREE.Fog(0x87ceeb, 20, 150);
 
+const raycaster = new THREE.Raycaster();
+
 const hudCanvas = document.getElementById('hudCanvas');
 const hudCtx = hudCanvas.getContext('2d');
 
@@ -209,6 +211,10 @@ const level = levels[currentLevel];
 level.forEach((p) => {
     addPlatform(p);
 });
+
+const collidableMeshes = objects
+    .filter(o => o.mesh)
+    .map(o => o.mesh);
 
 function randint(min, max) {
     return min + Math.floor(Math.random() * (max - min + 1));
@@ -530,12 +536,34 @@ function move() {
         camera.position.y = player.mesh.position.y + player.height * 0.5;
         camera.position.z = player.mesh.position.z;
     } else {
-        camera.rotation.y = player.angleY;
-        camera.rotation.x = player.angleX;
-
-        camera.position.x = player.mesh.position.x + 8;
-        camera.position.y = player.mesh.position.y + 4;
-        camera.position.z = player.mesh.position.z;
+        const camDistance = 8;
+        const camHeight = 4;
+    
+        const desiredX = player.mesh.position.x + Math.sin(player.angleY) * camDistance;
+        const desiredZ = player.mesh.position.z + Math.cos(player.angleY) * camDistance;
+        const desiredY = player.mesh.position.y + camHeight;
+    
+        const origin = new THREE.Vector3(
+            player.mesh.position.x,
+            player.mesh.position.y + player.height * 0.4,
+            player.mesh.position.z
+        );
+        const desired = new THREE.Vector3(desiredX, desiredY, desiredZ);
+        const dir = desired.clone().sub(origin);
+        const fullDist = dir.length();
+        dir.normalize();
+    
+        raycaster.set(origin, dir);
+        raycaster.far = fullDist;
+        const hits = raycaster.intersectObjects(collidableMeshes, false);
+    
+        let finalDist = fullDist;
+        if (hits.length > 0) {
+            finalDist = Math.max(0.3, hits[0].distance - 0.3);
+        }
+    
+        const finalPos = origin.clone().add(dir.multiplyScalar(finalDist));
+        camera.position.copy(finalPos);
     }
 }
 
@@ -544,6 +572,7 @@ function animate() {
     move();
     if (player.dead) {
         player.mesh.position.set(-5, 5, 0);
+        player.dead = false;
     }
     renderer.render(scene, camera);
     drawHeightHUD();
