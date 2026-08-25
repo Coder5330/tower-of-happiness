@@ -524,6 +524,13 @@ function move() {
     
         const finalPos = origin.clone().add(dir.multiplyScalar(finalDist));
         camera.position.copy(finalPos);
+
+        const lookTarget = new THREE.Vector3(
+            player.mesh.position.x,
+            player.mesh.position.y + player.height * 0.5,
+            player.mesh.position.z
+        );
+        camera.lookAt(lookTarget);
     }
 }
 
