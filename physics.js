@@ -1,7 +1,7 @@
 const {
     PLAYER_SIZE, PLAYER_SPEED, JUMP_VELOCITY, GRAVITY, TERMINAL_VELOCITY,
     SPAWN_POSITION, ground, level,
-} = require('./levels');
+} = require('./levelData');
 
 function collidebox(posA, sizeA, posB, sizeB) {
     const halfA = { x: sizeA.width / 2, y: sizeA.height / 2, z: sizeA.depth / 2 };
@@ -118,7 +118,7 @@ function createPlayer() {
     };
 }
 
-function resolveMovement(player, objects, keys) {
+function resolveMovement(player, objects, keys, otherPlayers) {
     if (player.ridingPlatform && player.ridingPlatform.frameDelta) {
         player.position.x += player.ridingPlatform.frameDelta.x;
         player.position.y += player.ridingPlatform.frameDelta.y;
@@ -144,7 +144,16 @@ function resolveMovement(player, objects, keys) {
 
     const sizeA = PLAYER_SIZE;
 
-    for (const object of objects) {
+    const collidables = otherPlayers && otherPlayers.length
+        ? objects.concat(otherPlayers.map((op) => ({
+              position: op.position,
+              width: PLAYER_SIZE.width,
+              height: PLAYER_SIZE.height,
+              depth: PLAYER_SIZE.depth,
+          })))
+        : objects;
+
+    for (const object of collidables) {
         let objTop, objBottom;
         if (object.shape === "sphere" || object.shape === "cylinder") {
             objTop = object.position.y + object.radius;
