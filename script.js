@@ -66,7 +66,7 @@ ground.position.set(0, -0.5, 0);
 scene.add(ground);
 
 const objects = [
-    { position: ground.position, width: groundData.width, height: groundData.height, depth: groundData.depth }
+    { position: ground.position, mesh: ground, width: groundData.width, height: groundData.height, depth: groundData.depth }
 ];
 
 function addPlatform(p) {
@@ -115,6 +115,7 @@ function addPlatform(p) {
         radius: p.radius,
         length: p.length,
         size: p.size,
+        axis: p.axis,
         special: p.special,
         startPos: p.startPos,
         endPos: p.endPos,
@@ -128,78 +129,43 @@ const levels = [
         { x: 0, y: TOWER_HEIGHT / 2, z: -GROUND_AREA / 2 + 0.5, width: GROUND_AREA, height: TOWER_HEIGHT, depth: 1, color: 0x0000ff, type: "wall" },
         { x: -GROUND_AREA / 2 + 0.5, y: TOWER_HEIGHT / 2, z: 0, width: 1, height: TOWER_HEIGHT, depth: GROUND_AREA, color: 0x0000ff, type: "wall" },
         { x: GROUND_AREA / 2 - 0.5, y: TOWER_HEIGHT / 2, z: 0, width: 1, height: TOWER_HEIGHT, depth: GROUND_AREA, color: 0x0000ff, type: "wall" },
-        // stepping stones — small, spaced, force careful footing
         { x: 0, y: 2, z: 6, shape: "box", width: 1.5, height: 0.5, depth: 1.5, color: 0x2ecc71, special: null },
         { x: 2, y: 3, z: 3, shape: "sphere", radius: 0.9, height: 0.5, color: 0x2ecc71, special: null },
         { x: 1, y: 4, z: 0, shape: "box", width: 1.2, height: 0.5, depth: 1.2, color: 0x2ecc71, special: null },
         { x: 3, y: 4.5, z: -2, shape: "triangle", size: 1.6, height: 0.5, color: 0x2ecc71, special: null },
-
-        // first kill zone — a spike to route around, not stand on
         { x: 2.5, y: 5, z: -0.5, shape: "cylinder", radius: 0.3, length: 2, color: 0xff0000, special: "kill" },
-
-        // rest platform
         { x: 4, y: 5, z: -3, shape: "box", width: 4, height: 0.5, depth: 4, color: 0xf1c40f, special: null },
-
-        // cylinder tightrope
         { x: 4, y: 7, z: -9, shape: "cylinder", radius: 0.35, length: 8, color: 0xe74c3c, special: null },
-
-        // moving platform bridging a gap the player can't clear standing still
         { x: 8, y: 8, z: -12, shape: "box", width: 2, height: 0.5, depth: 2, color: 0x1abc9c, special: "moving",
             startPos: { x: 8, y: 8, z: -12 }, endPos: { x: 12, y: 8, z: -12 } },
-
-        // staircase — evenly spaced small steps climbing steadily
         { x: 14, y: 9.5, z: -12, shape: "box", width: 1.5, height: 0.5, depth: 1.5, color: 0x3498db, special: null },
         { x: 15, y: 11, z: -9, shape: "sphere", radius: 0.9, height: 0.5, color: 0x3498db, special: null },
         { x: 15, y: 12.5, z: -6, shape: "box", width: 1.5, height: 0.5, depth: 1.5, color: 0x3498db, special: null },
         { x: 13, y: 14, z: -4, shape: "triangle", size: 1.4, height: 0.5, color: 0x3498db, special: null },
-
-        // second cylinder tightrope, perpendicular
         { x: 9, y: 15.5, z: -3, shape: "cylinder", radius: 0.35, length: 8, color: 0xe74c3c, special: null },
-
-        // rest platform
         { x: 4, y: 16.5, z: -2, shape: "box", width: 3.5, height: 0.5, depth: 3.5, color: 0xf1c40f, special: null },
-
-        // moving platform over a kill-floor gap
         { x: 0, y: 18, z: 2, shape: "box", width: 2, height: 0.5, depth: 2, color: 0x1abc9c, special: "moving",
             startPos: { x: 0, y: 18, z: 2 }, endPos: { x: 0, y: 18, z: 8 } },
-
-        // narrow zigzag stones
         { x: -3, y: 20, z: 9, shape: "sphere", radius: 0.7, height: 0.5, color: 0x9b59b6, special: null },
         { x: -6, y: 22, z: 7, shape: "box", width: 1, height: 0.5, depth: 1, color: 0x9b59b6, special: null },
         { x: -8, y: 24, z: 4, shape: "triangle", size: 1.2, height: 0.5, color: 0x9b59b6, special: null },
         { x: -6, y: 26, z: 1, shape: "sphere", radius: 0.7, height: 0.5, color: 0x9b59b6, special: null },
-
-        // spinning-feel hazard row — several kill cylinders in a line to weave through
         { x: -4, y: 27, z: -1, shape: "cylinder", radius: 0.3, length: 1.5, color: 0xff0000, special: "kill" },
         { x: -2, y: 27, z: -1, shape: "cylinder", radius: 0.3, length: 1.5, color: 0xff0000, special: "kill" },
-
-        // rest platform before the long moving-platform gauntlet
         { x: -3, y: 28, z: -3, shape: "box", width: 3.5, height: 0.5, depth: 3.5, color: 0xf1c40f, special: null },
-
-        // long vertical-travel moving platform — rises while you're on it
         { x: -3, y: 30, z: -8, shape: "box", width: 2, height: 0.5, depth: 2, color: 0x1abc9c, special: "moving",
             startPos: { x: -3, y: 30, z: -8 }, endPos: { x: -3, y: 36, z: -8 } },
-
-        // tight stepping run
         { x: -1, y: 38, z: -6, shape: "box", width: 1, height: 0.5, depth: 1, color: 0x2ecc71, special: null },
         { x: 2, y: 40, z: -8, shape: "triangle", size: 1, height: 0.5, color: 0x2ecc71, special: null },
         { x: 5, y: 42, z: -6, shape: "sphere", radius: 0.6, height: 0.5, color: 0x2ecc71, special: null },
         { x: 6, y: 44, z: -2, shape: "box", width: 1, height: 0.5, depth: 1, color: 0x2ecc71, special: null },
-
-        // final long tightrope, thinnest yet
         { x: 3, y: 46, z: 2, shape: "cylinder", radius: 0.25, length: 9, color: 0xe74c3c, special: null },
-
-        // last moving platform, horizontal sweep right before the goal
         { x: 3, y: 48, z: 8, shape: "box", width: 2, height: 0.5, depth: 2, color: 0x1abc9c, special: "moving",
             startPos: { x: -1, y: 48, z: 8 }, endPos: { x: 5, y: 48, z: 8 } },
-
-        // final stretch of tiny stones — hardest section, right before the goal
         { x: 4, y: 51, z: 4, shape: "sphere", radius: 0.5, height: 0.5, color: 0x9b59b6, special: null },
         { x: 3, y: 53, z: 1, shape: "triangle", size: 1.8, height: 0.5, color: 0x9b59b6, special: null },
         { x: 0, y: 55, z: 2, shape: "box", width: 0.8, height: 0.5, depth: 0.8, color: 0x9b59b6, special: null },
         { x: 0, y: 57, z: 4, shape: "box", width: 0.8, height: 0.5, depth: 0.8, color: 0x9b59b6, special: null },
-
-        // goal — big, gold, unmissable
         { x: 3, y: 58, z: 6, shape: "box", width: 5, height: 0.5, depth: 5, color: 0xf1c40f, special: null },
     ]
 ];
@@ -296,7 +262,7 @@ function drawHeightHUD() {
 
     const indicatorY = (barY + barHeight) - (progressRatio * barHeight);
 
-    hudCtx.strokeStyle = '#ff0000';
+    hudCtx.fillStyle = '#ff0000';
     hudCtx.fillRect(barX - 2, indicatorY, barWidth + 4, 2);
 
     hudCtx.fillStyle = '#ffffff';
@@ -366,6 +332,23 @@ function collidetriangle(triPos, size, height, boxPos, boxSize) {
     return !(hasNeg && hasPos);
 }
 
+// Returns a hit-test function for a given object, matching its shape.
+// Used both for movement collision and for kill-zone detection, so the
+// two stay consistent (previously kill zones always used collidebox,
+// which silently no-ops for sphere/cylinder/triangle objects since
+// their width/height/depth are undefined).
+function hitTestFor(object, sizeA) {
+    if (object.shape === "sphere") {
+        return (pos) => collidesphere(object.position, object.radius, pos, sizeA);
+    } else if (object.shape === "cylinder") {
+        return (pos) => collidecylinder(object.position, object.radius, object.length, object.axis || 'z', pos, sizeA);
+    } else if (object.shape === "triangle") {
+        return (pos) => collidetriangle(object.position, object.size, object.height, pos, sizeA);
+    } else {
+        return (pos) => collidebox(pos, sizeA, object.position, { width: object.width, height: object.height, depth: object.depth });
+    }
+}
+
 function move() {
     const forward = {
         x: -Math.sin(player.angleY),
@@ -400,31 +383,23 @@ function move() {
     player.on_ground = false;
     player.ridingPlatform = null;
 
+    const sizeA = { width: player.width, height: player.height, depth: player.depth };
+
     objects.forEach((object) => {
-        const sizeA = { width: player.width, height: player.height, depth: player.depth };
+        let objTop, objBottom;
 
-        let objTop, objBottom, hits;
-
-        if (object.shape === "sphere") {
+        if (object.shape === "sphere" || object.shape === "cylinder") {
             objTop = object.position.y + object.radius;
             objBottom = object.position.y - object.radius;
-            hits = (pos) => collidesphere(object.position, object.radius, pos, sizeA);
-
-        } else if (object.shape === "cylinder") {
-            objTop = object.position.y + object.radius;
-            objBottom = object.position.y - object.radius;
-            hits = (pos) => collidecylinder(object.position, object.radius, object.length, object.axis || 'z', pos, sizeA);
-
         } else if (object.shape === "triangle") {
             objTop = object.position.y + object.height / 2;
             objBottom = object.position.y - object.height / 2;
-            hits = (pos) => collidetriangle(object.position, object.size, object.height, pos, sizeA);
-
         } else {
             objTop = object.position.y + object.height / 2;
             objBottom = object.position.y - object.height / 2;
-            hits = (pos) => collidebox(pos, sizeA, object.position, { width: object.width, height: object.height, depth: object.depth });
         }
+
+        const hits = hitTestFor(object, sizeA);
 
         const newYPos = {
             x: player.mesh.position.x,
@@ -497,28 +472,13 @@ function move() {
 
     objects.forEach((object) => {
         if (object.special === "kill") {
-            const new_player = {
-                pos: {
-                    x: player.mesh.position.x + dx,
-                    y: player.mesh.position.y + dy,
-                    z: player.mesh.position.z + dz,
-                },
-                width: player.width,
-                height: player.height,
-                depth: player.depth
-            }
-            const new_object = {
-                pos: {
-                    x: object.position.x,
-                    y: object.position.y,
-                    z: object.position.z,
-                },
-                width: object.width,
-                height: object.height,
-                depth: object.depth
-            }
-            if (collidebox(new_player.pos, { width: new_player.width, height: new_player.height, depth: new_player.depth },
-                new_object.pos, { width: new_object.width, height: new_object.height, depth: new_object.depth })) {
+            const newPos = {
+                x: player.mesh.position.x + dx,
+                y: player.mesh.position.y + dy,
+                z: player.mesh.position.z + dz,
+            };
+            const hits = hitTestFor(object, sizeA);
+            if (hits(newPos)) {
                 player.dead = true;
             }
         }
@@ -572,6 +532,9 @@ function animate() {
     move();
     if (player.dead) {
         player.mesh.position.set(-5, 5, 0);
+        player.y_vel = 0;
+        player.on_ground = false;
+        player.ridingPlatform = null;
         player.dead = false;
     }
     renderer.render(scene, camera);
