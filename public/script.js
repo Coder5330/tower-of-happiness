@@ -55,11 +55,11 @@ function addPlatform(p) {
 
     if (p.shape === "sphere") {
         geometry = new THREE.SphereGeometry(p.radius, 16, 16);
-        mesh = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({ color: colorFor(p) }));
+        mesh = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({ color: p.color }));
 
     } else if (p.shape === "cylinder") {
         geometry = new THREE.CylinderGeometry(p.radius, p.radius, p.length, 12);
-        mesh = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({ color: colorFor(p) }));
+        mesh = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({ color: p.color }));
         if (p.axis === 'x') mesh.rotation.z = Math.PI / 2;
         else mesh.rotation.x = Math.PI / 2;
 
@@ -71,25 +71,18 @@ function addPlatform(p) {
         shape.lineTo(p.size / 2, (1 / 3) * h);
         shape.lineTo(0, -(2 / 3) * h);
         geometry = new THREE.ExtrudeGeometry(shape, { depth: p.height, bevelEnabled: false });
-        mesh = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({ color: colorFor(p) }));
+        mesh = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({ color: p.color }));
         mesh.rotation.x = -Math.PI / 2;
 
     } else {
         geometry = new THREE.BoxGeometry(p.width, p.height, p.depth);
-        mesh = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({ color: colorFor(p) }));
+        mesh = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({ color: p.color }));
     }
 
     mesh.position.set(p.x, p.y, p.z);
     scene.add(mesh);
     collidableMeshes.push(mesh);
     return mesh;
-}
-
-function colorFor(p) {
-    if (p.special === 'kill') return 0xff0000;
-    if (p.special === 'moving') return 0x1abc9c;
-    if (!p.shape) return 0x0000ff; 
-    return 0x2ecc71;
 }
 
 function randint(min, max) {
