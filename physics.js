@@ -42,18 +42,47 @@ function collidetriangle(triPos, size, height, boxPos, boxSize) {
         return false;
     }
     const h = size * Math.sqrt(3) / 2;
-    const p1 = { x: triPos.x, z: triPos.z - (2 / 3) * h };
-    const p2 = { x: triPos.x - size / 2, z: triPos.z + (1 / 3) * h };
-    const p3 = { x: triPos.x + size / 2, z: triPos.z + (1 / 3) * h };
-    function sign(ax, az, bx, bz, cx, cz) {
-        return (ax - cx) * (bz - cz) - (bx - cx) * (az - cz);
+    const tri = [
+        { x: triPos.x, z: triPos.z - (2 / 3) * h },
+        { x: triPos.x - size / 2, z: triPos.z + (1 / 3) * h },
+        { x: triPos.x + size / 2, z: triPos.z + (1 / 3) * h },
+    ];
+    const hx = boxSize.width / 2, hz = boxSize.depth / 2;
+    const box = [
+        { x: boxPos.x - hx, z: boxPos.z - hz },
+        { x: boxPos.x + hx, z: boxPos.z - hz },
+        { x: boxPos.x + hx, z: boxPos.z + hz },
+        { x: boxPos.x - hx, z: boxPos.z + hz },
+    ];
+
+    function project(points, axisX, axisZ) {
+        let min = Infinity, max = -Infinity;
+        for (const p of points) {
+            const proj = p.x * axisX + p.z * axisZ;
+            if (proj < min) min = proj;
+            if (proj > max) max = proj;
+        }
+        return { min, max };
     }
-    const d1 = sign(boxPos.x, boxPos.z, p1.x, p1.z, p2.x, p2.z);
-    const d2 = sign(boxPos.x, boxPos.z, p2.x, p2.z, p3.x, p3.z);
-    const d3 = sign(boxPos.x, boxPos.z, p3.x, p3.z, p1.x, p1.z);
-    const hasNeg = (d1 < 0) || (d2 < 0) || (d3 < 0);
-    const hasPos = (d1 > 0) || (d2 > 0) || (d3 > 0);
-    return !(hasNeg && hasPos);
+
+    function overlapsOnAxis(axisX, axisZ) {
+        const a = project(tri, axisX, axisZ);
+        const b = project(box, axisX, axisZ);
+        return a.max >= b.min && b.max >= a.min;
+    }
+
+    // box's own axes (equivalent to plain AABB overlap on x and z)
+    if (!overlapsOnAxis(1, 0)) return false;
+    if (!overlapsOnAxis(0, 1)) return false;
+
+    // triangle edge normals
+    for (let i = 0; i < 3; i++) {
+        const p1 = tri[i], p2 = tri[(i + 1) % 3];
+        const edgeX = p2.x - p1.x, edgeZ = p2.z - p1.z;
+        if (!overlapsOnAxis(-edgeZ, edgeX)) return false;
+    }
+
+    return true;
 }
 
 function hitTestFor(object, sizeA) {
@@ -106,9 +135,19 @@ function advanceMovingPlatforms(objects) {
     }
 }
 
+const SPAWN_JITTER = 1.5;
+
+function randomizedSpawnPosition() {
+    return {
+        x: SPAWN_POSITION.x + (Math.random() * 2 - 1) * SPAWN_JITTER,
+        y: SPAWN_POSITION.y,
+        z: SPAWN_POSITION.z + (Math.random() * 2 - 1) * SPAWN_JITTER,
+    };
+}
+
 function createPlayer() {
     return {
-        position: { ...SPAWN_POSITION },
+        position: randomizedSpawnPosition(),
         y_vel: 0,
         on_ground: true,
         angleY: 0,
@@ -116,6 +155,7 @@ function createPlayer() {
         ridingPlatform: null,
         pendingDelta: { x: 0, y: 0, z: 0 },
         pushDelta: { x: 0, z: 0 },
+        frameDelta: { x: 0, y: 0, z: 0 },
     };
 }
 
@@ -156,6 +196,11 @@ function resolveMovement(player, objects, keys, otherPlayers) {
           })))
         : objects;
 
+    const dy0 = dy;
+    let bestLandDy = null;
+    let bestLandObject = null;
+    let bestCeilDy = null;
+
     for (const object of collidables) {
         let objTop, objBottom;
         if (object.shape === "sphere" || object.shape === "cylinder") {
@@ -168,16 +213,20 @@ function resolveMovement(player, objects, keys, otherPlayers) {
 
         const hits = hitTestFor(object, sizeA);
 
-        const newYPos = { x: player.position.x, y: player.position.y + dy, z: player.position.z };
+        const newYPos = { x: player.position.x, y: player.position.y + dy0, z: player.position.z };
         if (hits(newYPos)) {
-            if (player.y_vel < 0 && (!object.isPlayer || object.position.y < player.position.y - 0.05)) {
-                player.on_ground = true;
-                dy = objTop - (player.position.y - sizeA.height / 2);
-                if (object.special === "moving") player.ridingPlatform = object;
-                player.y_vel = 0;
+            const currentFoot = player.position.y - sizeA.height / 2;
+            if (player.y_vel < 0 && objTop <= currentFoot + 0.05) {
+                const candidateDy = objTop - (player.position.y - sizeA.height / 2);
+                if (bestLandDy === null || candidateDy > bestLandDy) {
+                    bestLandDy = candidateDy;
+                    bestLandObject = object;
+                }
             } else if (player.y_vel >= 0) {
-                dy = objBottom - (player.position.y + sizeA.height / 2);
-                player.y_vel = 0;
+                const candidateDy = objBottom - (player.position.y + sizeA.height / 2);
+                if (bestCeilDy === null || candidateDy < bestCeilDy) {
+                    bestCeilDy = candidateDy;
+                }
             }
         }
 
@@ -194,7 +243,47 @@ function resolveMovement(player, objects, keys, otherPlayers) {
         }
     }
 
+    if (bestLandDy !== null) {
+        player.on_ground = true;
+        dy = bestLandDy;
+        if (bestLandObject.special === "moving") player.ridingPlatform = bestLandObject;
+        else if (bestLandObject.isPlayer) player.ridingPlatform = bestLandObject.ref;
+        player.y_vel = 0;
+    } else if (bestCeilDy !== null) {
+        dy = bestCeilDy;
+        player.y_vel = 0;
+    }
+
     player.pendingDelta = { x: dx, y: dy, z: dz };
+}
+
+function resolvePush(player, pushDelta, objects, otherPlayers) {
+    let dx = pushDelta.x, dz = pushDelta.z;
+    let blockedByX = null, blockedByZ = null;
+    if (dx === 0 && dz === 0) return { x: 0, z: 0, blockedByX, blockedByZ };
+
+    const sizeA = PLAYER_SIZE;
+    const solids = objects.filter((o) => o.special !== "kill");
+    const others = otherPlayers.map((op) => ({
+        position: op.position,
+        width: PLAYER_SIZE.width, height: PLAYER_SIZE.height, depth: PLAYER_SIZE.depth,
+        isPlayer: true, ref: op,
+    }));
+    const collidables = solids.concat(others);
+
+    for (const object of collidables) {
+        const hits = hitTestFor(object, sizeA);
+        if (dx !== 0) {
+            const newXPos = { x: player.position.x + dx, y: player.position.y, z: player.position.z };
+            if (hits(newXPos)) { if (object.isPlayer) blockedByX = object.ref; dx = 0; }
+        }
+        if (dz !== 0) {
+            const newZPos = { x: player.position.x, y: player.position.y, z: player.position.z + dz };
+            if (hits(newZPos)) { if (object.isPlayer) blockedByZ = object.ref; dz = 0; }
+        }
+    }
+
+    return { x: dx, z: dz, blockedByX, blockedByZ };
 }
 
 function applyPendingMove(player, objects) {
@@ -208,10 +297,11 @@ function applyPendingMove(player, objects) {
     }
 
     if (player.dead) {
-        player.position = { ...SPAWN_POSITION };
+        player.position = randomizedSpawnPosition();
         player.y_vel = 0;
         player.on_ground = false;
         player.ridingPlatform = null;
+        player.frameDelta = { x: 0, y: 0, z: 0 };
         player.dead = false;
         return;
     }
@@ -219,6 +309,7 @@ function applyPendingMove(player, objects) {
     player.position.x += dx;
     player.position.y += dy;
     player.position.z += dz;
+    player.frameDelta = { x: dx, y: dy, z: dz };
 }
 
-module.exports = { buildObjects, advanceMovingPlatforms, createPlayer, resolveMovement, applyPendingMove };
+module.exports = { buildObjects, advanceMovingPlatforms, createPlayer, resolveMovement, resolvePush, applyPendingMove };

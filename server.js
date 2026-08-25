@@ -2,7 +2,7 @@ const { WebSocketServer } = require('ws');
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
-const { buildObjects, advanceMovingPlatforms, createPlayer, resolveMovement, applyPendingMove } = require('./physics');
+const { buildObjects, advanceMovingPlatforms, createPlayer, resolveMovement, resolvePush, applyPendingMove } = require('./physics');
 const { level } = require('./levelData');
 
 const PORT = process.env.PORT || 8080;
@@ -124,9 +124,40 @@ setInterval(() => {
             resolveMovement(player, objects, player.keys, otherPlayers);
         }
 
-        for (const { player } of players.values()) {
-            player.pendingDelta.x += player.pushDelta.x;
-            player.pendingDelta.z += player.pushDelta.z;
+        const PUSH_CHAIN_ITERATIONS = 6;
+        for (let iter = 0; iter < PUSH_CHAIN_ITERATIONS; iter++) {
+            const forwarded = new Map(); // player -> { x, z } to apply next iteration
+            for (const [id, { player }] of players.entries()) {
+                if (player.pushDelta.x === 0 && player.pushDelta.z === 0) continue;
+                const otherPlayers = [];
+                for (const [otherId, { player: op }] of players.entries()) {
+                    if (otherId !== id) otherPlayers.push(op);
+                }
+                const attempted = { x: player.pushDelta.x, z: player.pushDelta.z };
+                const result = resolvePush(player, attempted, objects, otherPlayers);
+                player.pendingDelta.x += result.x;
+                player.pendingDelta.z += result.z;
+
+                const blockedX = attempted.x - result.x;
+                const blockedZ = attempted.z - result.z;
+                if (result.blockedByX && blockedX !== 0) {
+                    const entry = forwarded.get(result.blockedByX) || { x: 0, z: 0 };
+                    entry.x += blockedX;
+                    forwarded.set(result.blockedByX, entry);
+                }
+                if (result.blockedByZ && blockedZ !== 0) {
+                    const entry = forwarded.get(result.blockedByZ) || { x: 0, z: 0 };
+                    entry.z += blockedZ;
+                    forwarded.set(result.blockedByZ, entry);
+                }
+
+                player.pushDelta.x = 0;
+                player.pushDelta.z = 0;
+            }
+            for (const [targetPlayer, delta] of forwarded.entries()) {
+                targetPlayer.pushDelta.x += delta.x;
+                targetPlayer.pushDelta.z += delta.z;
+            }
         }
 
         advanceMovingPlatforms(objects);
