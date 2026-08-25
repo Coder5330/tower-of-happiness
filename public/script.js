@@ -1,8 +1,8 @@
 const MOUSE_SENSITIVITY = 0.002;
-const TOWER_HEIGHT = 60;
-const GROUND_AREA = 40;
-const SPAWN_POSITION = { x: -5, y: 5, z: 0 };
-const SERVER_URL = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.hostname + ':8080';
+const TOWER_HEIGHT = 60;       
+const GROUND_AREA = 40;        
+const SPAWN_POSITION = { x: -5, y: 5, z: 0 }; 
+const SERVER_URL = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host;
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x87ceeb);
@@ -45,7 +45,7 @@ const ground = new THREE.Mesh(
 ground.position.set(0, -0.5, 0);
 scene.add(ground);
 
-const collidableMeshes = [ground];
+const collidableMeshes = [ground]; 
 
 const platformMeshesByLevelIndex = [];
 
@@ -84,10 +84,11 @@ function addPlatform(p) {
     collidableMeshes.push(mesh);
     return mesh;
 }
+
 function colorFor(p) {
     if (p.special === 'kill') return 0xff0000;
     if (p.special === 'moving') return 0x1abc9c;
-    if (!p.shape) return 0x0000ff;
+    if (!p.shape) return 0x0000ff; 
     return 0x2ecc71;
 }
 
@@ -159,6 +160,7 @@ function drawHeightHUD(height) {
 
 let myId = null;
 let mode = 1; 
+
 let angleY = 0;
 let angleX = 0;
 
@@ -199,6 +201,7 @@ function connect() {
 
     ws.addEventListener('close', () => {
         console.warn('disconnected from game server — reload to reconnect');
+        
     });
 
     ws.addEventListener('error', (e) => console.error('websocket error', e));
@@ -228,6 +231,9 @@ function connect() {
                 entry.target.z = pos.z;
                 if (id !== myId) entry.mesh.rotation.y = pos.angleY;
             }
+            
+            
+            
             for (const [idxStr, pos] of Object.entries(msg.platforms)) {
                 const levelIndex = Number(idxStr) - 1;
                 const mesh = platformMeshesByLevelIndex[levelIndex];
@@ -246,7 +252,7 @@ function sendInput() {
         angleY,
     };
     const serialized = JSON.stringify(payload);
-    if (serialized === lastSentInput) return;
+    if (serialized === lastSentInput) return; 
     lastSentInput = serialized;
     ws.send(serialized);
 }
