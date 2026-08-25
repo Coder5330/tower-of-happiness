@@ -10,7 +10,7 @@ const PUBLIC_DIR = path.join(__dirname, 'public');
 const MIME_TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css' };
 const TICK_HZ = 60;
 const TICK_MS = 1000 / TICK_HZ;
-const BROADCAST_EVERY_N_TICKS = 2; 
+const BROADCAST_EVERY_N_TICKS = 1; 
 
 const objects = buildObjects();
 const players = new Map(); 
