@@ -3,7 +3,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const { buildObjects, advanceMovingPlatforms, createPlayer, resolveMovement, applyPendingMove } = require('./physics');
-const { level } = require('./levels');
+const { level } = require('./levelData');
 
 const PORT = process.env.PORT || 8080;
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -111,8 +111,12 @@ setInterval(() => {
     lastTime = now;
 
     while (accumulator >= TICK_MS) {
-        for (const { player } of players.values()) {
-            resolveMovement(player, objects, player.keys);
+        for (const [id, { player }] of players.entries()) {
+            const otherPlayers = [];
+            for (const [otherId, { player: op }] of players.entries()) {
+                if (otherId !== id) otherPlayers.push({ position: op.position });
+            }
+            resolveMovement(player, objects, player.keys, otherPlayers);
         }
         advanceMovingPlatforms(objects);
         for (const { player } of players.values()) {
