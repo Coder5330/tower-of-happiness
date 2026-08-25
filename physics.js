@@ -115,6 +115,7 @@ function createPlayer() {
         dead: false,
         ridingPlatform: null,
         pendingDelta: { x: 0, y: 0, z: 0 },
+        pushDelta: { x: 0, z: 0 },
     };
 }
 
@@ -150,6 +151,8 @@ function resolveMovement(player, objects, keys, otherPlayers) {
               width: PLAYER_SIZE.width,
               height: PLAYER_SIZE.height,
               depth: PLAYER_SIZE.depth,
+              isPlayer: true,
+              ref: op,
           })))
         : objects;
 
@@ -167,21 +170,28 @@ function resolveMovement(player, objects, keys, otherPlayers) {
 
         const newYPos = { x: player.position.x, y: player.position.y + dy, z: player.position.z };
         if (hits(newYPos)) {
-            if (player.y_vel < 0) {
+            if (player.y_vel < 0 && (!object.isPlayer || object.position.y < player.position.y - 0.05)) {
                 player.on_ground = true;
                 dy = objTop - (player.position.y - sizeA.height / 2);
                 if (object.special === "moving") player.ridingPlatform = object;
-            } else {
+                player.y_vel = 0;
+            } else if (player.y_vel >= 0) {
                 dy = objBottom - (player.position.y + sizeA.height / 2);
+                player.y_vel = 0;
             }
-            player.y_vel = 0;
         }
 
         const newXPos = { x: player.position.x + dx, y: player.position.y, z: player.position.z };
-        if (hits(newXPos)) dx = 0;
+        if (hits(newXPos)) {
+            if (object.isPlayer) { object.ref.pushDelta.x += dx; dx = 0; }
+            else dx = 0;
+        }
 
         const newZPos = { x: player.position.x, y: player.position.y, z: player.position.z + dz };
-        if (hits(newZPos)) dz = 0;
+        if (hits(newZPos)) {
+            if (object.isPlayer) { object.ref.pushDelta.z += dz; dz = 0; }
+            else dz = 0;
+        }
     }
 
     player.pendingDelta = { x: dx, y: dy, z: dz };
