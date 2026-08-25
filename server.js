@@ -1,18 +1,47 @@
 const { WebSocketServer } = require('ws');
+const http = require('http');
+const fs = require('fs');
+const path = require('path');
 const { buildObjects, advanceMovingPlatforms, createPlayer, resolveMovement, applyPendingMove } = require('./physics');
-const { level } = require('./levels');
+const { level } = require('./levelData');
 
 const PORT = process.env.PORT || 8080;
+const PUBLIC_DIR = path.join(__dirname, 'public');
+const MIME_TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css' };
 const TICK_HZ = 60;
 const TICK_MS = 1000 / TICK_HZ;
-const BROADCAST_EVERY_N_TICKS = 2;
+const BROADCAST_EVERY_N_TICKS = 2; 
 
 const objects = buildObjects();
-const players = new Map();
+const players = new Map(); 
 let nextId = 1;
 
-const wss = new WebSocketServer({ port: PORT });
-console.log(`Game server listening on :${PORT}`);
+function serveStatic(req, res) {
+    const urlPath = req.url.split('?')[0];
+    const relPath = urlPath === '/' ? '/index.html' : urlPath;
+    const filePath = path.join(PUBLIC_DIR, path.normalize(relPath).replace(/^(\.\.[/\\])+/, ''));
+    if (!filePath.startsWith(PUBLIC_DIR)) {
+        res.writeHead(403);
+        res.end('Forbidden');
+        return;
+    }
+    fs.readFile(filePath, (err, data) => {
+        if (err) {
+            res.writeHead(404);
+            res.end('Not found');
+            return;
+        }
+        res.writeHead(200, { 'Content-Type': MIME_TYPES[path.extname(filePath)] || 'application/octet-stream' });
+        res.end(data);
+    });
+}
+
+const httpServer = http.createServer(serveStatic);
+const wss = new WebSocketServer({ server: httpServer });
+
+httpServer.listen(PORT, () => {
+    console.log(`Serving game + WebSocket on :${PORT}`);
+});
 
 wss.on('connection', (ws) => {
     const id = nextId++;
@@ -20,6 +49,9 @@ wss.on('connection', (ws) => {
     player.keys = { w: false, a: false, s: false, d: false, jump: false };
     players.set(id, { ws, player });
 
+    
+    
+    
     ws.send(JSON.stringify({ type: 'welcome', id, level }));
 
     ws.on('message', (raw) => {
@@ -27,6 +59,8 @@ wss.on('connection', (ws) => {
         try { msg = JSON.parse(raw); } catch { return; }
         if (msg.type !== 'input') return;
 
+        
+        
         const entry = players.get(id);
         if (!entry) return;
         const k = msg.keys || {};
@@ -56,6 +90,8 @@ function broadcastState() {
     for (const [id, { player }] of players.entries()) {
         playerState[id] = { x: player.position.x, y: player.position.y, z: player.position.z, angleY: player.angleY };
     }
+    
+    
     const platforms = {};
     objects.forEach((object, idx) => {
         if (object.special === 'moving') {
