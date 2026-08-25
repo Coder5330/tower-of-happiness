@@ -10,7 +10,7 @@ const PUBLIC_DIR = path.join(__dirname, 'public');
 const MIME_TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css' };
 const TICK_HZ = 60;
 const TICK_MS = 1000 / TICK_HZ;
-const BROADCAST_EVERY_N_TICKS = 1; 
+const BROADCAST_EVERY_N_TICKS = 2; 
 
 const objects = buildObjects();
 const players = new Map(); 
@@ -111,13 +111,24 @@ setInterval(() => {
     lastTime = now;
 
     while (accumulator >= TICK_MS) {
+        for (const { player } of players.values()) {
+            player.pushDelta.x = 0;
+            player.pushDelta.z = 0;
+        }
+
         for (const [id, { player }] of players.entries()) {
             const otherPlayers = [];
             for (const [otherId, { player: op }] of players.entries()) {
-                if (otherId !== id) otherPlayers.push({ position: op.position });
+                if (otherId !== id) otherPlayers.push(op);
             }
             resolveMovement(player, objects, player.keys, otherPlayers);
         }
+
+        for (const { player } of players.values()) {
+            player.pendingDelta.x += player.pushDelta.x;
+            player.pendingDelta.z += player.pushDelta.z;
+        }
+
         advanceMovingPlatforms(objects);
         for (const { player } of players.values()) {
             applyPendingMove(player, objects);
