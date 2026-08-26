@@ -131,7 +131,7 @@ function stepMeteors() {
 
 const RED_LIGHT_TICKS = 300;
 const GREEN_LIGHT_TICKS = 540;
-const LAVA_RISE_PER_TICK = 0.03;
+const LAVA_RISE_PER_TICK = 0.008;
 const LAVA_START_Y = -10;
 const LAVA_RESET_ABOVE = TOWER_HEIGHT + 10;
 const PAYWALL_INTERVAL_TICKS = 2400;
@@ -182,7 +182,13 @@ function stepLava() {
 
     for (const { player } of players.values()) {
         if (isImmune(player)) continue;
-        if (player.position.y - PLAYER_SIZE.height / 2 < gimmick.lavaY) respawnPlayer(player);
+        if (player.position.y - PLAYER_SIZE.height / 2 < gimmick.lavaY) {
+            respawnPlayer(player);
+            // If the lava has already risen past the spawn point, dropping them
+            // back at spawn would just kill them again next tick, forever.
+            const safeY = gimmick.lavaY + PLAYER_SIZE.height / 2 + 1;
+            if (player.position.y < safeY) player.position.y = safeY;
+        }
     }
 }
 
