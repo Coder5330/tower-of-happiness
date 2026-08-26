@@ -28,24 +28,64 @@ const AUTH_LOCKOUT_MS = 30000;
 const CHAT_MAX_LEN = 200;
 const CHAT_MIN_INTERVAL_MS = 300;
 
-const METEOR_RADIUS = 0.6;
-const METEOR_SPEED = 0.5;
-const METEOR_SPAWN_EVERY_TICKS = 90;
+const METEOR_RADIUS_MIN = 0.8;
+const METEOR_RADIUS_MAX = 2;
+const METEOR_SPEED_MIN = 0.4;
+const METEOR_SPEED_MAX = 0.9;
+const METEOR_SPAWN_MIN_MS = 200;
+const METEOR_SPAWN_MAX_MS = 800;
+const HOMING_CHANCE = 0.15;
+const HOMING_SPEED_MULT = 10;
+const NORMAL_WARN_SECONDS = 0.6;
+const HOMING_WARN_SECONDS = 1.4;
 const METEOR_SPAWN_Y = TOWER_HEIGHT + 15;
 const METEOR_DESPAWN_Y = -5;
 const METEOR_XZ_RANGE = GROUND_AREA / 2 - 1.5;
+const GROUND_Y = 0;
 
 const meteors = [];
+const pendingExplosions = [];
 let nextMeteorId = 1;
-let ticksUntilMeteor = METEOR_SPAWN_EVERY_TICKS;
+let ticksUntilMeteor = 1;
+
+function randomBetween(min, max) {
+    return min + Math.random() * (max - min);
+}
+
+function nextSpawnTicks() {
+    return Math.max(1, Math.round(randomBetween(METEOR_SPAWN_MIN_MS, METEOR_SPAWN_MAX_MS) / TICK_MS));
+}
 
 function spawnMeteor() {
-    meteors.push({
-        id: nextMeteorId++,
-        x: (Math.random() * 2 - 1) * METEOR_XZ_RANGE,
-        y: METEOR_SPAWN_Y,
-        z: (Math.random() * 2 - 1) * METEOR_XZ_RANGE,
-    });
+    const homing = Math.random() < HOMING_CHANCE;
+    const radius = randomBetween(METEOR_RADIUS_MIN, METEOR_RADIUS_MAX);
+    const speed = randomBetween(METEOR_SPEED_MIN, METEOR_SPEED_MAX) * (homing ? HOMING_SPEED_MULT : 1);
+    const x = randomBetween(-METEOR_XZ_RANGE, METEOR_XZ_RANGE);
+    const z = randomBetween(-METEOR_XZ_RANGE, METEOR_XZ_RANGE);
+    const y = METEOR_SPAWN_Y;
+
+    let vx = 0, vz = 0, vy = -speed;
+    if (homing) {
+        const targets = Array.from(players.values(), (e) => e.player).filter((p) => !(p.admin && p.admin.fly));
+        if (targets.length) {
+            const target = targets[Math.floor(Math.random() * targets.length)];
+            const dx = target.position.x - x, dy = target.position.y - y, dz = target.position.z - z;
+            const dist = Math.hypot(dx, dy, dz) || 1;
+            vx = (dx / dist) * speed;
+            vy = (dy / dist) * speed;
+            vz = (dz / dist) * speed;
+            if (vy >= 0) vy = -speed; // never launch a meteor upward
+        }
+    }
+
+    const t = vy < 0 ? (y - GROUND_Y) / -vy : 0;
+    const landingX = x + vx * t;
+    const landingZ = z + vz * t;
+
+    const warnTicks = (homing ? HOMING_WARN_SECONDS : NORMAL_WARN_SECONDS) * TICK_HZ;
+    const shadowY = GROUND_Y + Math.abs(vy) * warnTicks;
+
+    meteors.push({ id: nextMeteorId++, x, y, z, vx, vy, vz, radius, landingX, landingZ, shadowY, homing });
 }
 
 function meteorHitsPlayer(meteor, player) {
@@ -54,19 +94,21 @@ function meteorHitsPlayer(meteor, player) {
     const closestY = Math.max(player.position.y - halfH, Math.min(meteor.y, player.position.y + halfH));
     const closestZ = Math.max(player.position.z - halfD, Math.min(meteor.z, player.position.z + halfD));
     const dx = meteor.x - closestX, dy = meteor.y - closestY, dz = meteor.z - closestZ;
-    return (dx * dx + dy * dy + dz * dz) < METEOR_RADIUS * METEOR_RADIUS;
+    return (dx * dx + dy * dy + dz * dz) < meteor.radius * meteor.radius;
 }
 
 function stepMeteors() {
     ticksUntilMeteor--;
     if (ticksUntilMeteor <= 0) {
         spawnMeteor();
-        ticksUntilMeteor = METEOR_SPAWN_EVERY_TICKS;
+        ticksUntilMeteor = nextSpawnTicks();
     }
 
     for (let i = meteors.length - 1; i >= 0; i--) {
         const meteor = meteors[i];
-        meteor.y -= METEOR_SPEED;
+        meteor.x += meteor.vx;
+        meteor.y += meteor.vy;
+        meteor.z += meteor.vz;
 
         let hit = false;
         for (const { player } of players.values()) {
@@ -77,7 +119,11 @@ function stepMeteors() {
             }
         }
 
-        if (hit || meteor.y < METEOR_DESPAWN_Y) meteors.splice(i, 1);
+        const landed = meteor.y - meteor.radius <= GROUND_Y;
+        if (hit || landed) {
+            pendingExplosions.push({ x: meteor.x, y: Math.max(meteor.y, GROUND_Y), z: meteor.z, radius: meteor.radius });
+        }
+        if (hit || landed || meteor.y < METEOR_DESPAWN_Y) meteors.splice(i, 1);
     }
 }
 
@@ -259,7 +305,12 @@ function broadcastState() {
             platforms[idx] = { x: object.position.x, y: object.position.y, z: object.position.z };
         }
     });
-    broadcastRaw({ type: 'state', players: playerState, platforms, meteors: meteors.map((m) => ({ id: m.id, x: m.x, y: m.y, z: m.z })) });
+    const meteorState = meteors.map((m) => ({
+        id: m.id, x: m.x, y: m.y, z: m.z, radius: m.radius,
+        landingX: m.landingX, landingZ: m.landingZ, shadowY: m.shadowY, homing: m.homing,
+    }));
+    const explosionState = pendingExplosions.splice(0, pendingExplosions.length);
+    broadcastRaw({ type: 'state', players: playerState, platforms, meteors: meteorState, explosions: explosionState });
 }
 
 let lastTime = Date.now();
