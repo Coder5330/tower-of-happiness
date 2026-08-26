@@ -306,7 +306,7 @@ function logToConsole(text) {
     while (chatLogEl.children.length > CHAT_MAX_LINES) chatLogEl.removeChild(chatLogEl.firstChild);
 }
 
-const KNOWN_COMMANDS = ['help', 'login', 'admin', 'fly', 'speed', 'gravity', 'jump', 'teleport', 'logout'];
+const KNOWN_COMMANDS = ['help', 'fly', 'speed', 'gravity', 'jump', 'teleport', 'logout'];
 
 function openAdminConsole() {
     consoleOpen = true;
@@ -317,9 +317,9 @@ function openAdminConsole() {
     if (document.pointerLockElement === renderer.domElement) document.exitPointerLock();
 }
 
-const LOGIN_PREFIX_RE = /^(login|admin)(\s|$)/i;
+const CODE_PREFIX = '**';
 adminConsoleInputEl.addEventListener('input', () => {
-    adminConsoleInputEl.type = LOGIN_PREFIX_RE.test(adminConsoleInputEl.value) ? 'password' : 'text';
+    adminConsoleInputEl.type = adminConsoleInputEl.value.startsWith(CODE_PREFIX) ? 'password' : 'text';
 });
 
 function closeAdminConsole() {
@@ -341,9 +341,17 @@ function sendChat(text) {
 function handleConsoleCommand(text) {
     const trimmed = text.trim();
     if (!trimmed) return;
+
+    if (trimmed.startsWith(CODE_PREFIX)) {
+        const code = trimmed.slice(CODE_PREFIX.length).trim();
+        logToConsole('> ' + CODE_PREFIX + '*'.repeat(code.length));
+        ws.send(JSON.stringify({ type: 'admin_auth', code }));
+        return;
+    }
+
     const [cmd, ...rest] = trimmed.split(/\s+/);
 
-    const isKnownCommand = KNOWN_COMMANDS.includes(cmd) && (adminAuthed || cmd === 'help' || cmd === 'login' || cmd === 'admin');
+    const isKnownCommand = KNOWN_COMMANDS.includes(cmd) && (adminAuthed || cmd === 'help');
     if (!isKnownCommand) {
         sendChat(trimmed);
         return;
@@ -354,15 +362,11 @@ function handleConsoleCommand(text) {
     if (cmd === 'help') {
         logToConsole(adminAuthed
             ? 'commands: fly on|off, speed <n>, gravity <n>, jump <n>, teleport top|spawn, logout'
-            : 'commands: login <code> (anything else is sent as chat)');
+            : `commands: ${CODE_PREFIX}<code> to log in (anything else is sent as chat)`);
         return;
     }
 
-    if (!adminAuthed) {
-        const code = rest[0] || '';
-        ws.send(JSON.stringify({ type: 'admin_auth', code }));
-        return;
-    }
+    if (!adminAuthed) return;
 
     switch (cmd) {
         case 'fly':
