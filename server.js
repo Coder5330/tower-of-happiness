@@ -127,6 +127,120 @@ function stepMeteors() {
     }
 }
 
+// --- Gimmicks, ported from the 2D prototype (jump-to-happiness) ---
+
+const RED_LIGHT_TICKS = 300;
+const GREEN_LIGHT_TICKS = 540;
+const SCRAMBLE_INTERVAL_TICKS = 720;
+const SHAKE_CHANCE_PER_TICK = 0.0015;
+const SHAKE_TICKS = 10;
+const LAVA_RISE_PER_TICK = 0.03;
+const LAVA_START_Y = -10;
+const LAVA_RESET_ABOVE = TOWER_HEIGHT + 10;
+const PAYWALL_INTERVAL_TICKS = 2400;
+const PAYWALL_PAY_CHANCE = 0.5;
+
+const gimmick = {
+    redLight: false,
+    redLightTimer: 0,
+    greenLightTimer: GREEN_LIGHT_TICKS,
+    scrambled: false,
+    scrambleTimer: SCRAMBLE_INTERVAL_TICKS,
+    shaking: false,
+    shakeTicks: 0,
+    lavaY: LAVA_START_Y,
+    paywallTimer: PAYWALL_INTERVAL_TICKS,
+};
+
+function isImmune(player) {
+    return player.admin && player.admin.fly;
+}
+
+function stepRedLight() {
+    if (gimmick.redLight) {
+        gimmick.redLightTimer--;
+        if (gimmick.redLightTimer <= 0) {
+            gimmick.redLight = false;
+            gimmick.greenLightTimer = GREEN_LIGHT_TICKS;
+        }
+    } else {
+        gimmick.greenLightTimer--;
+        if (gimmick.greenLightTimer <= 0) {
+            gimmick.redLight = true;
+            gimmick.redLightTimer = RED_LIGHT_TICKS;
+        }
+    }
+}
+
+// Getting caught moving during red light sends you back to spawn — classic
+// red-light-green-light, checked against the keys the player is holding this tick.
+function enforceRedLight() {
+    if (!gimmick.redLight) return;
+    for (const { player } of players.values()) {
+        if (isImmune(player)) continue;
+        const k = player.keys;
+        if (k.w || k.a || k.s || k.d || k.jump || k.down) respawnPlayer(player);
+    }
+}
+
+function stepScramble() {
+    gimmick.scrambleTimer--;
+    if (gimmick.scrambleTimer <= 0) {
+        gimmick.scrambled = !gimmick.scrambled;
+        gimmick.scrambleTimer = SCRAMBLE_INTERVAL_TICKS;
+    }
+}
+
+// W/S and A/D swapped while scrambled — resolveMovement itself stays untouched,
+// we just hand it a remapped view of the held keys.
+function scrambledKeys(keys) {
+    if (!gimmick.scrambled) return keys;
+    return { w: keys.s, a: keys.d, s: keys.w, d: keys.a, jump: keys.jump, down: keys.down };
+}
+
+function stepShake() {
+    if (gimmick.shaking) {
+        gimmick.shakeTicks--;
+        if (gimmick.shakeTicks <= 0) gimmick.shaking = false;
+    } else if (Math.random() < SHAKE_CHANCE_PER_TICK) {
+        gimmick.shaking = true;
+        gimmick.shakeTicks = SHAKE_TICKS;
+    }
+}
+
+function stepLava() {
+    gimmick.lavaY += LAVA_RISE_PER_TICK;
+    if (gimmick.lavaY > LAVA_RESET_ABOVE) gimmick.lavaY = LAVA_START_Y;
+
+    for (const { player } of players.values()) {
+        if (isImmune(player)) continue;
+        if (player.position.y - PLAYER_SIZE.height / 2 < gimmick.lavaY) respawnPlayer(player);
+    }
+}
+
+// Everyone gets the "PAY UP" prompt; each player independently rolls whether they
+// "paid" — the unlucky ones get yanked back to spawn.
+function stepPaywall() {
+    gimmick.paywallTimer--;
+    if (gimmick.paywallTimer > 0) return;
+    gimmick.paywallTimer = PAYWALL_INTERVAL_TICKS;
+
+    broadcastRaw({ type: 'paywall' });
+    for (const { player } of players.values()) {
+        if (isImmune(player)) continue;
+        if (Math.random() >= PAYWALL_PAY_CHANCE) respawnPlayer(player);
+    }
+}
+
+function stepGimmicks() {
+    stepRedLight();
+    enforceRedLight();
+    stepScramble();
+    stepShake();
+    stepLava();
+    stepPaywall();
+}
+
 // Keyed by IP rather than per-connection, so opening another tab/socket doesn't
 // reset the fail counter and sidestep the lockout.
 const ipAuthState = new Map();
@@ -310,7 +424,16 @@ function broadcastState() {
         landingX: m.landingX, landingZ: m.landingZ, shadowY: m.shadowY, homing: m.homing,
     }));
     const explosionState = pendingExplosions.splice(0, pendingExplosions.length);
-    broadcastRaw({ type: 'state', players: playerState, platforms, meteors: meteorState, explosions: explosionState });
+    const gimmickState = {
+        redLight: gimmick.redLight,
+        scrambled: gimmick.scrambled,
+        shaking: gimmick.shaking,
+        lavaY: gimmick.lavaY,
+    };
+    broadcastRaw({
+        type: 'state', players: playerState, platforms, meteors: meteorState,
+        explosions: explosionState, gimmick: gimmickState,
+    });
 }
 
 let lastTime = Date.now();
@@ -323,6 +446,8 @@ setInterval(() => {
     lastTime = now;
 
     while (accumulator >= TICK_MS) {
+        stepGimmicks();
+
         for (const { player } of players.values()) {
             player.pushDelta.x = 0;
             player.pushDelta.z = 0;
@@ -334,7 +459,7 @@ setInterval(() => {
             for (const [otherId, { player: op }] of players.entries()) {
                 if (otherId !== id) otherPlayers.push(op);
             }
-            resolveMovement(player, objects, player.keys, otherPlayers);
+            resolveMovement(player, objects, scrambledKeys(player.keys), otherPlayers);
         }
 
         const PUSH_CHAIN_ITERATIONS = 6;
