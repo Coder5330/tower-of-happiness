@@ -184,6 +184,38 @@ function removePlayerMesh(id) {
     remotePlayers.delete(id);
 }
 
+const METEOR_RADIUS = 0.6;
+const meteorMeshes = new Map();
+const meteorGeometry = new THREE.SphereGeometry(METEOR_RADIUS, 10, 10);
+const meteorMaterial = new THREE.MeshStandardMaterial({ color: 0xff3300, emissive: 0x992200, emissiveIntensity: 0.8 });
+
+function ensureMeteorMesh(id, pos) {
+    if (meteorMeshes.has(id)) return meteorMeshes.get(id);
+    const mesh = new THREE.Mesh(meteorGeometry, meteorMaterial);
+    mesh.position.set(pos.x, pos.y, pos.z);
+    scene.add(mesh);
+    const entry = { mesh, target: { ...pos } };
+    meteorMeshes.set(id, entry);
+    return entry;
+}
+
+function syncMeteors(meteorList) {
+    const seen = new Set();
+    for (const m of meteorList) {
+        seen.add(m.id);
+        const entry = ensureMeteorMesh(m.id, m);
+        entry.target.x = m.x;
+        entry.target.y = m.y;
+        entry.target.z = m.z;
+    }
+    for (const [id, entry] of meteorMeshes.entries()) {
+        if (!seen.has(id)) {
+            scene.remove(entry.mesh);
+            meteorMeshes.delete(id);
+        }
+    }
+}
+
 let ws;
 let lastSentInput = null;
 
@@ -235,6 +267,8 @@ function connect() {
                 const mesh = platformMeshesByLevelIndex[levelIndex];
                 if (mesh) mesh.position.set(pos.x, pos.y, pos.z);
             }
+
+            syncMeteors(msg.meteors || []);
 
         } else if (msg.type === 'admin_auth_result') {
             if (msg.ok) {
@@ -444,6 +478,12 @@ function animate() {
     sendInput();
 
     for (const entry of remotePlayers.values()) {
+        entry.mesh.position.x += (entry.target.x - entry.mesh.position.x) * LERP_RATE;
+        entry.mesh.position.y += (entry.target.y - entry.mesh.position.y) * LERP_RATE;
+        entry.mesh.position.z += (entry.target.z - entry.mesh.position.z) * LERP_RATE;
+    }
+
+    for (const entry of meteorMeshes.values()) {
         entry.mesh.position.x += (entry.target.x - entry.mesh.position.x) * LERP_RATE;
         entry.mesh.position.y += (entry.target.y - entry.mesh.position.y) * LERP_RATE;
         entry.mesh.position.z += (entry.target.z - entry.mesh.position.z) * LERP_RATE;

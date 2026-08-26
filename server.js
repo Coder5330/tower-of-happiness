@@ -3,8 +3,8 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { buildObjects, advanceMovingPlatforms, createPlayer, resolveMovement, resolvePush, applyPendingMove, applyDismounts } = require('./physics');
-const { level, SPAWN_POSITION, TOWER_HEIGHT } = require('./levels');
+const { buildObjects, advanceMovingPlatforms, createPlayer, resolveMovement, resolvePush, applyPendingMove, applyDismounts, respawnPlayer } = require('./physics');
+const { level, SPAWN_POSITION, TOWER_HEIGHT, GROUND_AREA, PLAYER_SIZE } = require('./levels');
 
 const PORT = process.env.PORT || 8080;
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -27,6 +27,59 @@ const AUTH_MAX_FAILS = 5;
 const AUTH_LOCKOUT_MS = 30000;
 const CHAT_MAX_LEN = 200;
 const CHAT_MIN_INTERVAL_MS = 300;
+
+const METEOR_RADIUS = 0.6;
+const METEOR_SPEED = 0.5;
+const METEOR_SPAWN_EVERY_TICKS = 90;
+const METEOR_SPAWN_Y = TOWER_HEIGHT + 15;
+const METEOR_DESPAWN_Y = -5;
+const METEOR_XZ_RANGE = GROUND_AREA / 2 - 1.5;
+
+const meteors = [];
+let nextMeteorId = 1;
+let ticksUntilMeteor = METEOR_SPAWN_EVERY_TICKS;
+
+function spawnMeteor() {
+    meteors.push({
+        id: nextMeteorId++,
+        x: (Math.random() * 2 - 1) * METEOR_XZ_RANGE,
+        y: METEOR_SPAWN_Y,
+        z: (Math.random() * 2 - 1) * METEOR_XZ_RANGE,
+    });
+}
+
+function meteorHitsPlayer(meteor, player) {
+    const halfW = PLAYER_SIZE.width / 2, halfH = PLAYER_SIZE.height / 2, halfD = PLAYER_SIZE.depth / 2;
+    const closestX = Math.max(player.position.x - halfW, Math.min(meteor.x, player.position.x + halfW));
+    const closestY = Math.max(player.position.y - halfH, Math.min(meteor.y, player.position.y + halfH));
+    const closestZ = Math.max(player.position.z - halfD, Math.min(meteor.z, player.position.z + halfD));
+    const dx = meteor.x - closestX, dy = meteor.y - closestY, dz = meteor.z - closestZ;
+    return (dx * dx + dy * dy + dz * dz) < METEOR_RADIUS * METEOR_RADIUS;
+}
+
+function stepMeteors() {
+    ticksUntilMeteor--;
+    if (ticksUntilMeteor <= 0) {
+        spawnMeteor();
+        ticksUntilMeteor = METEOR_SPAWN_EVERY_TICKS;
+    }
+
+    for (let i = meteors.length - 1; i >= 0; i--) {
+        const meteor = meteors[i];
+        meteor.y -= METEOR_SPEED;
+
+        let hit = false;
+        for (const { player } of players.values()) {
+            if (player.admin && player.admin.fly) continue;
+            if (meteorHitsPlayer(meteor, player)) {
+                respawnPlayer(player);
+                hit = true;
+            }
+        }
+
+        if (hit || meteor.y < METEOR_DESPAWN_Y) meteors.splice(i, 1);
+    }
+}
 
 // Keyed by IP rather than per-connection, so opening another tab/socket doesn't
 // reset the fail counter and sidestep the lockout.
@@ -206,7 +259,7 @@ function broadcastState() {
             platforms[idx] = { x: object.position.x, y: object.position.y, z: object.position.z };
         }
     });
-    broadcastRaw({ type: 'state', players: playerState, platforms });
+    broadcastRaw({ type: 'state', players: playerState, platforms, meteors: meteors.map((m) => ({ id: m.id, x: m.x, y: m.y, z: m.z })) });
 }
 
 let lastTime = Date.now();
@@ -280,6 +333,8 @@ setInterval(() => {
         for (const { player } of players.values()) {
             applyPendingMove(player, objects);
         }
+
+        stepMeteors();
 
         tickCount++;
         if (tickCount % BROADCAST_EVERY_N_TICKS === 0) broadcastState();

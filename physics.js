@@ -344,6 +344,15 @@ function resolvePush(player, pushDelta, objects, otherPlayers) {
     return { x: dx, z: dz, blockedByX, blockedByZ };
 }
 
+function respawnPlayer(player) {
+    player.position = randomizedSpawnPosition();
+    player.y_vel = 0;
+    player.on_ground = false;
+    player.ridingPlatform = null;
+    player.frameDelta = { x: 0, y: 0, z: 0 };
+    player.dead = false;
+}
+
 function applyPendingMove(player, objects) {
     const { x: dx, y: dy, z: dz } = player.pendingDelta;
     const newPos = { x: player.position.x + dx, y: player.position.y + dy, z: player.position.z + dz };
@@ -358,12 +367,7 @@ function applyPendingMove(player, objects) {
     }
 
     if (player.dead) {
-        player.position = randomizedSpawnPosition();
-        player.y_vel = 0;
-        player.on_ground = false;
-        player.ridingPlatform = null;
-        player.frameDelta = { x: 0, y: 0, z: 0 };
-        player.dead = false;
+        respawnPlayer(player);
         return;
     }
 
@@ -373,4 +377,7 @@ function applyPendingMove(player, objects) {
     player.frameDelta = { x: dx, y: dy, z: dz };
 }
 
-module.exports = { buildObjects, advanceMovingPlatforms, createPlayer, resolveMovement, resolvePush, applyPendingMove, applyDismounts };
+module.exports = {
+    buildObjects, advanceMovingPlatforms, createPlayer, resolveMovement, resolvePush,
+    applyPendingMove, applyDismounts, respawnPlayer,
+};
