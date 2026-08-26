@@ -349,10 +349,14 @@ function handleConsoleCommand(text) {
         return;
     }
 
+    if (!adminAuthed) {
+        sendChat(trimmed);
+        return;
+    }
+
     const [cmd, ...rest] = trimmed.split(/\s+/);
 
-    const isKnownCommand = KNOWN_COMMANDS.includes(cmd) && (adminAuthed || cmd === 'help');
-    if (!isKnownCommand) {
+    if (!KNOWN_COMMANDS.includes(cmd)) {
         sendChat(trimmed);
         return;
     }
@@ -360,13 +364,9 @@ function handleConsoleCommand(text) {
     logToConsole('> ' + trimmed);
 
     if (cmd === 'help') {
-        logToConsole(adminAuthed
-            ? 'commands: fly on|off, speed <n>, gravity <n>, jump <n>, teleport top|spawn, logout'
-            : `commands: ${CODE_PREFIX}<code> to log in (anything else is sent as chat)`);
+        logToConsole('commands: fly on|off, speed <n>, gravity <n>, jump <n>, teleport top|spawn, logout');
         return;
     }
-
-    if (!adminAuthed) return;
 
     switch (cmd) {
         case 'fly':
