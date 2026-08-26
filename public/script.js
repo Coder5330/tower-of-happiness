@@ -402,6 +402,7 @@ document.getElementById('adminGravity').addEventListener('change', (e) => sendAd
 document.getElementById('adminJump').addEventListener('change', (e) => sendAdminCmd('jump', Number(e.target.value)));
 document.getElementById('adminTpTop').addEventListener('click', () => sendAdminCmd('teleport', null, 'top'));
 document.getElementById('adminTpSpawn').addEventListener('click', () => sendAdminCmd('teleport', null, 'spawn'));
+document.getElementById('adminPanelClose').addEventListener('click', () => adminPanelEl.classList.add('hidden'));
 
 window.addEventListener('click', (e) => {
     if (consoleOpen) return;
