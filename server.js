@@ -126,7 +126,7 @@ setInterval(() => {
 
         const PUSH_CHAIN_ITERATIONS = 6;
         for (let iter = 0; iter < PUSH_CHAIN_ITERATIONS; iter++) {
-            const forwarded = new Map(); // player -> { x, z } to apply next iteration
+            const forwarded = new Map();
             for (const [id, { player }] of players.entries()) {
                 if (player.pushDelta.x === 0 && player.pushDelta.z === 0) continue;
                 const otherPlayers = [];
