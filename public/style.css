@@ -82,9 +82,26 @@ canvas {
 }
 
 .adminPanelTitle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   font-weight: bold;
   color: #ff4500;
   margin-bottom: 2px;
+}
+
+#adminPanelClose {
+  background: none;
+  border: none;
+  color: #fff;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 2px;
+}
+
+#adminPanelClose:hover {
+  color: #ff4500;
 }
 
 #adminPanel label {
