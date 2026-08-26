@@ -24,6 +24,8 @@ if (!process.env.ADMIN_CODE) {
 
 const AUTH_MAX_FAILS = 5;
 const AUTH_LOCKOUT_MS = 30000;
+const CHAT_MAX_LEN = 200;
+const CHAT_MIN_INTERVAL_MS = 300;
 
 function timingSafeEqualStrings(a, b) {
     const bufA = Buffer.from(String(a));
@@ -72,7 +74,7 @@ wss.on('connection', (ws) => {
     const id = nextId++;
     const player = createPlayer();
     player.keys = { w: false, a: false, s: false, d: false, jump: false, down: false };
-    const entry = { ws, player, authFails: 0, authLockUntil: 0 };
+    const entry = { ws, player, authFails: 0, authLockUntil: 0, lastChatAt: 0 };
     players.set(id, entry);
 
     ws.send(JSON.stringify({ type: 'welcome', id, level }));
@@ -89,6 +91,17 @@ wss.on('connection', (ws) => {
                 w: !!k.w, a: !!k.a, s: !!k.s, d: !!k.d, jump: !!k.jump, down: !!k.down,
             };
             if (typeof msg.angleY === 'number') entry.player.angleY = msg.angleY;
+            return;
+        }
+
+        if (msg.type === 'chat') {
+            const now = Date.now();
+            if (now - entry.lastChatAt < CHAT_MIN_INTERVAL_MS) return;
+            if (typeof msg.text !== 'string') return;
+            const text = msg.text.trim().slice(0, CHAT_MAX_LEN);
+            if (!text) return;
+            entry.lastChatAt = now;
+            broadcastRaw({ type: 'chat', id, text });
             return;
         }
 

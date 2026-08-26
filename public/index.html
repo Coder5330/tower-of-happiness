@@ -9,9 +9,10 @@
         <canvas id="canvas"></canvas>
         <canvas id="hudCanvas" style="position: absolute; left: 0; top: 0; z-index: 2; pointer-events: none;"></canvas>
 
+        <div id="chatLog"></div>
+
         <div id="adminConsole" class="hidden">
-            <div id="adminConsoleLog"></div>
-            <input id="adminConsoleInput" type="text" autocomplete="off" placeholder="type a command, e.g. login &lt;code&gt; or help" />
+            <input id="adminConsoleInput" type="text" autocomplete="off" placeholder="chat, or a command like login &lt;code&gt; / help" />
         </div>
 
         <div id="adminPanel" class="hidden">
@@ -27,6 +28,6 @@
         </div>
 
         <script src="https://unpkg.com/three@0.160.0/build/three.min.js"></script>
-        <script src="script.js?v=3"></script>
+        <script src="script.js?v=4"></script>
     </body>
 </html>
