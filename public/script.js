@@ -312,9 +312,15 @@ function openAdminConsole() {
     consoleOpen = true;
     adminConsoleEl.classList.remove('hidden');
     adminConsoleInputEl.value = '';
+    adminConsoleInputEl.type = 'text';
     adminConsoleInputEl.focus();
     if (document.pointerLockElement === renderer.domElement) document.exitPointerLock();
 }
+
+const LOGIN_PREFIX_RE = /^(login|admin)(\s|$)/i;
+adminConsoleInputEl.addEventListener('input', () => {
+    adminConsoleInputEl.type = LOGIN_PREFIX_RE.test(adminConsoleInputEl.value) ? 'password' : 'text';
+});
 
 function closeAdminConsole() {
     consoleOpen = false;
@@ -393,6 +399,7 @@ adminConsoleInputEl.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') {
         handleConsoleCommand(adminConsoleInputEl.value);
         adminConsoleInputEl.value = '';
+        adminConsoleInputEl.type = 'text';
     } else if (e.key === 'Escape') {
         closeAdminConsole();
     }
