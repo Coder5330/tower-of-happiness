@@ -156,10 +156,33 @@ function createPlayer() {
         pendingDelta: { x: 0, y: 0, z: 0 },
         pushDelta: { x: 0, z: 0 },
         frameDelta: { x: 0, y: 0, z: 0 },
+        admin: { authed: false, fly: false, speedMult: 1, gravityMult: 1, jumpMult: 1 },
     };
 }
 
 function resolveMovement(player, objects, keys, otherPlayers) {
+    const admin = player.admin;
+
+    if (admin && admin.fly) {
+        const forward = { x: -Math.sin(player.angleY), z: -Math.cos(player.angleY) };
+        const right = { x: Math.cos(player.angleY), z: -Math.sin(player.angleY) };
+        const flySpeed = PLAYER_SPEED * admin.speedMult;
+
+        let dx = 0, dy = 0, dz = 0;
+        if (keys.w) { dx += forward.x * flySpeed; dz += forward.z * flySpeed; }
+        if (keys.s) { dx -= forward.x * flySpeed; dz -= forward.z * flySpeed; }
+        if (keys.d) { dx += right.x * flySpeed; dz += right.z * flySpeed; }
+        if (keys.a) { dx -= right.x * flySpeed; dz -= right.z * flySpeed; }
+        if (keys.jump) dy += flySpeed;
+        if (keys.down) dy -= flySpeed;
+
+        player.y_vel = 0;
+        player.on_ground = false;
+        player.ridingPlatform = null;
+        player.pendingDelta = { x: dx, y: dy, z: dz };
+        return;
+    }
+
     if (player.ridingPlatform && player.ridingPlatform.frameDelta) {
         player.position.x += player.ridingPlatform.frameDelta.x;
         player.position.y += player.ridingPlatform.frameDelta.y;
@@ -169,14 +192,18 @@ function resolveMovement(player, objects, keys, otherPlayers) {
     const forward = { x: -Math.sin(player.angleY), z: -Math.cos(player.angleY) };
     const right = { x: Math.cos(player.angleY), z: -Math.sin(player.angleY) };
 
-    let dx = 0, dy = 0, dz = 0;
-    if (keys.w) { dx += forward.x * PLAYER_SPEED; dz += forward.z * PLAYER_SPEED; }
-    if (keys.s) { dx -= forward.x * PLAYER_SPEED; dz -= forward.z * PLAYER_SPEED; }
-    if (keys.d) { dx += right.x * PLAYER_SPEED; dz += right.z * PLAYER_SPEED; }
-    if (keys.a) { dx -= right.x * PLAYER_SPEED; dz -= right.z * PLAYER_SPEED; }
-    if (keys.jump && player.on_ground) player.y_vel = JUMP_VELOCITY;
+    const speed = admin ? PLAYER_SPEED * admin.speedMult : PLAYER_SPEED;
+    const jumpVelocity = admin ? JUMP_VELOCITY * admin.jumpMult : JUMP_VELOCITY;
+    const gravity = admin ? GRAVITY * admin.gravityMult : GRAVITY;
 
-    player.y_vel -= GRAVITY;
+    let dx = 0, dy = 0, dz = 0;
+    if (keys.w) { dx += forward.x * speed; dz += forward.z * speed; }
+    if (keys.s) { dx -= forward.x * speed; dz -= forward.z * speed; }
+    if (keys.d) { dx += right.x * speed; dz += right.z * speed; }
+    if (keys.a) { dx -= right.x * speed; dz -= right.z * speed; }
+    if (keys.jump && player.on_ground) player.y_vel = jumpVelocity;
+
+    player.y_vel -= gravity;
     if (player.y_vel < TERMINAL_VELOCITY) player.y_vel = TERMINAL_VELOCITY;
     dy = player.y_vel;
 
@@ -290,10 +317,13 @@ function applyPendingMove(player, objects) {
     const { x: dx, y: dy, z: dz } = player.pendingDelta;
     const newPos = { x: player.position.x + dx, y: player.position.y + dy, z: player.position.z + dz };
 
-    for (const object of objects) {
-        if (object.special !== "kill") continue;
-        const hits = hitTestFor(object, PLAYER_SIZE);
-        if (hits(newPos)) { player.dead = true; break; }
+    const flying = player.admin && player.admin.fly;
+    if (!flying) {
+        for (const object of objects) {
+            if (object.special !== "kill") continue;
+            const hits = hitTestFor(object, PLAYER_SIZE);
+            if (hits(newPos)) { player.dead = true; break; }
+        }
     }
 
     if (player.dead) {

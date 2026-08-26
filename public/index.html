@@ -8,7 +8,25 @@
     <body>
         <canvas id="canvas"></canvas>
         <canvas id="hudCanvas" style="position: absolute; left: 0; top: 0; z-index: 2; pointer-events: none;"></canvas>
+
+        <div id="adminConsole" class="hidden">
+            <div id="adminConsoleLog"></div>
+            <input id="adminConsoleInput" type="text" autocomplete="off" placeholder="type a command, e.g. login &lt;code&gt; or help" />
+        </div>
+
+        <div id="adminPanel" class="hidden">
+            <div class="adminPanelTitle">Admin</div>
+            <label><input type="checkbox" id="adminFly" /> Fly / noclip</label>
+            <label>Speed <input type="number" id="adminSpeed" step="0.1" min="0.1" max="10" value="1" /></label>
+            <label>Gravity <input type="number" id="adminGravity" step="0.1" min="0" max="5" value="1" /></label>
+            <label>Jump <input type="number" id="adminJump" step="0.1" min="0.1" max="10" value="1" /></label>
+            <div class="adminPanelButtons">
+                <button id="adminTpTop">Teleport top</button>
+                <button id="adminTpSpawn">Teleport spawn</button>
+            </div>
+        </div>
+
         <script src="https://unpkg.com/three@0.160.0/build/three.min.js"></script>
-        <script src="script.js?v=2"></script>
+        <script src="script.js?v=3"></script>
     </body>
 </html>

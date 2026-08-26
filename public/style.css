@@ -4,8 +4,95 @@ body {
   background-color: #000;
 }
 
-canvas { 
-  display: block; 
-  width: 100vw; 
-  height: 100vh; 
+canvas {
+  display: block;
+  width: 100vw;
+  height: 100vh;
+}
+
+.hidden {
+  display: none !important;
+}
+
+#adminConsole {
+  position: fixed;
+  left: 12px;
+  bottom: 12px;
+  width: min(480px, 90vw);
+  z-index: 10;
+  font-family: monospace;
+  font-size: 13px;
+  background: rgba(0, 0, 0, 0.75);
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 4px;
+  padding: 6px;
+}
+
+#adminConsoleLog {
+  max-height: 160px;
+  overflow-y: auto;
+  color: #ddd;
+  margin-bottom: 4px;
+  white-space: pre-wrap;
+}
+
+#adminConsoleInput {
+  width: 100%;
+  box-sizing: border-box;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  color: #fff;
+  font-family: monospace;
+  font-size: 13px;
+  padding: 4px 6px;
+  border-radius: 3px;
+}
+
+#adminPanel {
+  position: fixed;
+  top: 12px;
+  right: 12px;
+  z-index: 10;
+  font-family: monospace;
+  font-size: 12px;
+  background: rgba(0, 0, 0, 0.65);
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 4px;
+  padding: 8px 10px;
+  color: #fff;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+#adminPanel.hidden {
+  display: none !important;
+}
+
+.adminPanelTitle {
+  font-weight: bold;
+  color: #ff4500;
+  margin-bottom: 2px;
+}
+
+#adminPanel label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+#adminPanel input[type="number"] {
+  width: 60px;
+}
+
+.adminPanelButtons {
+  display: flex;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+.adminPanelButtons button {
+  flex: 1;
+  cursor: pointer;
 }
