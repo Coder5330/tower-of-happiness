@@ -296,15 +296,12 @@ const lightIndicatorEl = document.getElementById('lightIndicator');
 const paywallOverlayEl = document.getElementById('paywallOverlay');
 const paywallTextEl = document.getElementById('paywallText');
 
-let isShaking = false;
-
 function syncGimmick(g) {
     lightIndicatorEl.classList.remove('hidden');
     lightIndicatorEl.classList.toggle('red', g.redLight);
     lightIndicatorEl.classList.toggle('green', !g.redLight);
     lightIndicatorEl.textContent = g.redLight ? 'RED LIGHT' : 'GREEN LIGHT';
 
-    isShaking = g.shaking;
     updateLava(g.lavaY);
 }
 
@@ -641,11 +638,6 @@ function animate() {
                 me.mesh.position.z
             ));
         }
-    }
-
-    if (isShaking) {
-        camera.position.x += (Math.random() - 0.5) * 0.3;
-        camera.position.y += (Math.random() - 0.5) * 0.3;
     }
 
     renderer.render(scene, camera);

@@ -131,8 +131,6 @@ function stepMeteors() {
 
 const RED_LIGHT_TICKS = 300;
 const GREEN_LIGHT_TICKS = 540;
-const SHAKE_CHANCE_PER_TICK = 0.0015;
-const SHAKE_TICKS = 10;
 const LAVA_RISE_PER_TICK = 0.03;
 const LAVA_START_Y = -10;
 const LAVA_RESET_ABOVE = TOWER_HEIGHT + 10;
@@ -143,8 +141,6 @@ const gimmick = {
     redLight: false,
     redLightTimer: 0,
     greenLightTimer: GREEN_LIGHT_TICKS,
-    shaking: false,
-    shakeTicks: 0,
     lavaY: LAVA_START_Y,
     paywallTimer: PAYWALL_INTERVAL_TICKS,
 };
@@ -180,16 +176,6 @@ function enforceRedLight() {
     }
 }
 
-function stepShake() {
-    if (gimmick.shaking) {
-        gimmick.shakeTicks--;
-        if (gimmick.shakeTicks <= 0) gimmick.shaking = false;
-    } else if (Math.random() < SHAKE_CHANCE_PER_TICK) {
-        gimmick.shaking = true;
-        gimmick.shakeTicks = SHAKE_TICKS;
-    }
-}
-
 function stepLava() {
     gimmick.lavaY += LAVA_RISE_PER_TICK;
     if (gimmick.lavaY > LAVA_RESET_ABOVE) gimmick.lavaY = LAVA_START_Y;
@@ -217,7 +203,6 @@ function stepPaywall() {
 function stepGimmicks() {
     stepRedLight();
     enforceRedLight();
-    stepShake();
     stepLava();
     stepPaywall();
 }
@@ -407,7 +392,6 @@ function broadcastState() {
     const explosionState = pendingExplosions.splice(0, pendingExplosions.length);
     const gimmickState = {
         redLight: gimmick.redLight,
-        shaking: gimmick.shaking,
         lavaY: gimmick.lavaY,
     };
     broadcastRaw({
