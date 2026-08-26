@@ -232,6 +232,15 @@ function connect() {
                 const mesh = platformMeshesByLevelIndex[levelIndex];
                 if (mesh) mesh.position.set(pos.x, pos.y, pos.z);
             }
+
+        } else if (msg.type === 'admin_auth_result') {
+            if (msg.ok) {
+                adminAuthed = true;
+                adminPanelEl.classList.remove('hidden');
+                logToConsole('authenticated — admin panel unlocked');
+            } else {
+                logToConsole(msg.locked ? 'too many failed attempts — locked out temporarily' : 'incorrect code');
+            }
         }
     });
 }
@@ -239,13 +248,15 @@ connect();
 
 function sendInput() {
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
-    const payload = {
-        type: 'input',
-        keys: { w: !!keys['w'], a: !!keys['a'], s: !!keys['s'], d: !!keys['d'], jump: !!keys[' '] },
-        angleY,
-    };
+    const payload = consoleOpen
+        ? { type: 'input', keys: { w: false, a: false, s: false, d: false, jump: false, down: false }, angleY }
+        : {
+              type: 'input',
+              keys: { w: !!keys['w'], a: !!keys['a'], s: !!keys['s'], d: !!keys['d'], jump: !!keys[' '], down: !!keys['Shift'] },
+              angleY,
+          };
     const serialized = JSON.stringify(payload);
-    if (serialized === lastSentInput) return; 
+    if (serialized === lastSentInput) return;
     lastSentInput = serialized;
     ws.send(serialized);
 }
@@ -253,16 +264,128 @@ function sendInput() {
 const keys = {};
 
 window.addEventListener('keydown', (e) => {
+    if (consoleOpen) {
+        if (e.key === 'Escape') closeAdminConsole();
+        return;
+    }
     keys[e.key] = true;
     if (e.key === 'Tab') {
         e.preventDefault();
         mode = mode === 1 ? 3 : 1;
         const me = remotePlayers.get(myId);
         if (me) me.mesh.visible = mode === 3;
+    } else if (e.key === '/') {
+        e.preventDefault();
+        openAdminConsole();
     }
 });
 
 window.addEventListener('keyup', (e) => { keys[e.key] = false; });
+
+// --- Admin console / cheat panel ---
+
+let consoleOpen = false;
+let adminAuthed = false;
+const adminConsoleEl = document.getElementById('adminConsole');
+const adminConsoleLogEl = document.getElementById('adminConsoleLog');
+const adminConsoleInputEl = document.getElementById('adminConsoleInput');
+const adminPanelEl = document.getElementById('adminPanel');
+
+function logToConsole(text) {
+    const line = document.createElement('div');
+    line.textContent = text;
+    adminConsoleLogEl.appendChild(line);
+    adminConsoleLogEl.scrollTop = adminConsoleLogEl.scrollHeight;
+}
+
+function openAdminConsole() {
+    consoleOpen = true;
+    adminConsoleEl.classList.remove('hidden');
+    adminConsoleInputEl.value = '';
+    adminConsoleInputEl.focus();
+    if (document.pointerLockElement === renderer.domElement) document.exitPointerLock();
+}
+
+function closeAdminConsole() {
+    consoleOpen = false;
+    adminConsoleEl.classList.add('hidden');
+    adminConsoleInputEl.blur();
+}
+
+function sendAdminCmd(cmd, value, target) {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    ws.send(JSON.stringify({ type: 'admin_cmd', cmd, value, target }));
+}
+
+function handleConsoleCommand(text) {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    logToConsole('> ' + trimmed);
+    const [cmd, ...rest] = trimmed.split(/\s+/);
+
+    if (cmd === 'help') {
+        logToConsole(adminAuthed
+            ? 'commands: fly on|off, speed <n>, gravity <n>, jump <n>, teleport top|spawn, logout'
+            : 'commands: login <code>');
+        return;
+    }
+
+    if (!adminAuthed) {
+        if (cmd === 'login' || cmd === 'admin') {
+            const code = rest[0] || '';
+            ws.send(JSON.stringify({ type: 'admin_auth', code }));
+        } else {
+            logToConsole('not authenticated — type: login <code>');
+        }
+        return;
+    }
+
+    switch (cmd) {
+        case 'fly':
+            sendAdminCmd('fly', rest[0] !== 'off');
+            document.getElementById('adminFly').checked = rest[0] !== 'off';
+            break;
+        case 'speed':
+            sendAdminCmd('speed', Number(rest[0]));
+            document.getElementById('adminSpeed').value = rest[0];
+            break;
+        case 'gravity':
+            sendAdminCmd('gravity', Number(rest[0]));
+            document.getElementById('adminGravity').value = rest[0];
+            break;
+        case 'jump':
+            sendAdminCmd('jump', Number(rest[0]));
+            document.getElementById('adminJump').value = rest[0];
+            break;
+        case 'teleport':
+            sendAdminCmd('teleport', null, rest[0]);
+            break;
+        case 'logout':
+            adminAuthed = false;
+            adminPanelEl.classList.add('hidden');
+            logToConsole('logged out');
+            break;
+        default:
+            logToConsole('unknown command — type: help');
+    }
+}
+
+adminConsoleInputEl.addEventListener('keydown', (e) => {
+    e.stopPropagation();
+    if (e.key === 'Enter') {
+        handleConsoleCommand(adminConsoleInputEl.value);
+        adminConsoleInputEl.value = '';
+    } else if (e.key === 'Escape') {
+        closeAdminConsole();
+    }
+});
+
+document.getElementById('adminFly').addEventListener('change', (e) => sendAdminCmd('fly', e.target.checked));
+document.getElementById('adminSpeed').addEventListener('change', (e) => sendAdminCmd('speed', Number(e.target.value)));
+document.getElementById('adminGravity').addEventListener('change', (e) => sendAdminCmd('gravity', Number(e.target.value)));
+document.getElementById('adminJump').addEventListener('change', (e) => sendAdminCmd('jump', Number(e.target.value)));
+document.getElementById('adminTpTop').addEventListener('click', () => sendAdminCmd('teleport', null, 'top'));
+document.getElementById('adminTpSpawn').addEventListener('click', () => sendAdminCmd('teleport', null, 'spawn'));
 
 window.addEventListener('click', () => {
     renderer.domElement.requestPointerLock();

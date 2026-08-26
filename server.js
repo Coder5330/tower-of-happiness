@@ -2,19 +2,44 @@ const { WebSocketServer } = require('ws');
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const { buildObjects, advanceMovingPlatforms, createPlayer, resolveMovement, resolvePush, applyPendingMove } = require('./physics');
-const { level } = require('./levels');
+const { level, SPAWN_POSITION, TOWER_HEIGHT } = require('./levels');
 
 const PORT = process.env.PORT || 8080;
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const MIME_TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css' };
 const TICK_HZ = 60;
 const TICK_MS = 1000 / TICK_HZ;
-const BROADCAST_EVERY_N_TICKS = 2; 
+const BROADCAST_EVERY_N_TICKS = 2;
 
 const objects = buildObjects();
-const players = new Map(); 
+const players = new Map();
 let nextId = 1;
+
+const ADMIN_CODE = process.env.ADMIN_CODE || crypto.randomBytes(6).toString('hex');
+if (!process.env.ADMIN_CODE) {
+    console.log(`No ADMIN_CODE set — generated admin code for this run: ${ADMIN_CODE}`);
+}
+
+const AUTH_MAX_FAILS = 5;
+const AUTH_LOCKOUT_MS = 30000;
+
+function timingSafeEqualStrings(a, b) {
+    const bufA = Buffer.from(String(a));
+    const bufB = Buffer.from(String(b));
+    if (bufA.length !== bufB.length) {
+        crypto.timingSafeEqual(bufB, bufB); // keep timing comparable
+        return false;
+    }
+    return crypto.timingSafeEqual(bufA, bufB);
+}
+
+function clampNumber(value, min, max, fallback) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return fallback;
+    return Math.min(max, Math.max(min, n));
+}
 
 function serveStatic(req, res) {
     const urlPath = req.url.split('?')[0];
@@ -46,28 +71,81 @@ httpServer.listen(PORT, () => {
 wss.on('connection', (ws) => {
     const id = nextId++;
     const player = createPlayer();
-    player.keys = { w: false, a: false, s: false, d: false, jump: false };
-    players.set(id, { ws, player });
+    player.keys = { w: false, a: false, s: false, d: false, jump: false, down: false };
+    const entry = { ws, player, authFails: 0, authLockUntil: 0 };
+    players.set(id, entry);
 
-    
-    
-    
     ws.send(JSON.stringify({ type: 'welcome', id, level }));
 
     ws.on('message', (raw) => {
         let msg;
         try { msg = JSON.parse(raw); } catch { return; }
-        if (msg.type !== 'input') return;
-
-        
-        
         const entry = players.get(id);
         if (!entry) return;
-        const k = msg.keys || {};
-        entry.player.keys = {
-            w: !!k.w, a: !!k.a, s: !!k.s, d: !!k.d, jump: !!k.jump,
-        };
-        if (typeof msg.angleY === 'number') entry.player.angleY = msg.angleY;
+
+        if (msg.type === 'input') {
+            const k = msg.keys || {};
+            entry.player.keys = {
+                w: !!k.w, a: !!k.a, s: !!k.s, d: !!k.d, jump: !!k.jump, down: !!k.down,
+            };
+            if (typeof msg.angleY === 'number') entry.player.angleY = msg.angleY;
+            return;
+        }
+
+        if (msg.type === 'admin_auth') {
+            const now = Date.now();
+            if (now < entry.authLockUntil) {
+                ws.send(JSON.stringify({ type: 'admin_auth_result', ok: false, locked: true }));
+                return;
+            }
+            const ok = typeof msg.code === 'string' && timingSafeEqualStrings(msg.code, ADMIN_CODE);
+            if (ok) {
+                entry.authFails = 0;
+                entry.player.admin.authed = true;
+            } else {
+                entry.authFails++;
+                if (entry.authFails >= AUTH_MAX_FAILS) {
+                    entry.authLockUntil = now + AUTH_LOCKOUT_MS;
+                    entry.authFails = 0;
+                }
+            }
+            ws.send(JSON.stringify({ type: 'admin_auth_result', ok }));
+            return;
+        }
+
+        if (msg.type === 'admin_cmd') {
+            if (!entry.player.admin.authed) return;
+            const admin = entry.player.admin;
+            switch (msg.cmd) {
+                case 'fly':
+                    admin.fly = !!msg.value;
+                    break;
+                case 'speed':
+                    admin.speedMult = clampNumber(msg.value, 0.1, 10, admin.speedMult);
+                    break;
+                case 'gravity':
+                    admin.gravityMult = clampNumber(msg.value, 0, 5, admin.gravityMult);
+                    break;
+                case 'jump':
+                    admin.jumpMult = clampNumber(msg.value, 0.1, 10, admin.jumpMult);
+                    break;
+                case 'teleport': {
+                    let dest = null;
+                    if (msg.target === 'top') dest = { x: SPAWN_POSITION.x, y: TOWER_HEIGHT + 2, z: SPAWN_POSITION.z };
+                    else if (msg.target === 'spawn') dest = { x: SPAWN_POSITION.x, y: SPAWN_POSITION.y, z: SPAWN_POSITION.z };
+                    if (dest) {
+                        entry.player.position = { x: dest.x, y: dest.y, z: dest.z };
+                        entry.player.y_vel = 0;
+                        entry.player.on_ground = false;
+                        entry.player.ridingPlatform = null;
+                    }
+                    break;
+                }
+                default:
+                    break;
+            }
+            return;
+        }
     });
 
     ws.on('close', () => {
