@@ -293,7 +293,6 @@ function updateExplosions() {
 }
 
 const lightIndicatorEl = document.getElementById('lightIndicator');
-const scrambleIndicatorEl = document.getElementById('scrambleIndicator');
 const paywallOverlayEl = document.getElementById('paywallOverlay');
 const paywallTextEl = document.getElementById('paywallText');
 
@@ -305,7 +304,6 @@ function syncGimmick(g) {
     lightIndicatorEl.classList.toggle('green', !g.redLight);
     lightIndicatorEl.textContent = g.redLight ? 'RED LIGHT' : 'GREEN LIGHT';
 
-    scrambleIndicatorEl.classList.toggle('hidden', !g.scrambled);
     isShaking = g.shaking;
     updateLava(g.lavaY);
 }

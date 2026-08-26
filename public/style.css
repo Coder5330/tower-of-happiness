@@ -157,27 +157,6 @@ canvas {
   background: rgba(180, 0, 0, 0.75);
 }
 
-#scrambleIndicator {
-  position: fixed;
-  top: 60px;
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 8;
-  font-family: sans-serif;
-  font-weight: bold;
-  font-size: 14px;
-  letter-spacing: 1px;
-  color: #ff66ff;
-  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.9);
-  pointer-events: none;
-  animation: scramblePulse 0.6s infinite alternate;
-}
-
-@keyframes scramblePulse {
-  from { opacity: 0.5; }
-  to { opacity: 1; }
-}
-
 #paywallOverlay {
   position: fixed;
   inset: 0;
