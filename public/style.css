@@ -129,3 +129,71 @@ canvas {
   flex: 1;
   cursor: pointer;
 }
+
+#lightIndicator {
+  position: fixed;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 8;
+  font-family: sans-serif;
+  font-weight: bold;
+  font-size: 22px;
+  letter-spacing: 2px;
+  padding: 6px 22px;
+  border-radius: 20px;
+  pointer-events: none;
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.8);
+  transition: background-color 0.15s;
+}
+
+#lightIndicator.green {
+  color: #0f0;
+  background: rgba(0, 60, 0, 0.55);
+}
+
+#lightIndicator.red {
+  color: #fff;
+  background: rgba(180, 0, 0, 0.75);
+}
+
+#scrambleIndicator {
+  position: fixed;
+  top: 60px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 8;
+  font-family: sans-serif;
+  font-weight: bold;
+  font-size: 14px;
+  letter-spacing: 1px;
+  color: #ff66ff;
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.9);
+  pointer-events: none;
+  animation: scramblePulse 0.6s infinite alternate;
+}
+
+@keyframes scramblePulse {
+  from { opacity: 0.5; }
+  to { opacity: 1; }
+}
+
+#paywallOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  background: rgba(0, 0, 0, 0.85);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+
+#paywallText {
+  font-family: sans-serif;
+  font-weight: 900;
+  font-size: 64px;
+  color: #ffd700;
+  text-shadow: 0 0 20px rgba(255, 215, 0, 0.8);
+  letter-spacing: 4px;
+}

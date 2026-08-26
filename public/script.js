@@ -45,7 +45,19 @@ const ground = new THREE.Mesh(
 ground.position.set(0, -0.5, 0);
 scene.add(ground);
 
-const collidableMeshes = [ground]; 
+const collidableMeshes = [ground];
+
+const lava = new THREE.Mesh(
+    new THREE.BoxGeometry(GROUND_AREA, 200, GROUND_AREA),
+    new THREE.MeshStandardMaterial({ color: 0xff3300, emissive: 0xcc2200, emissiveIntensity: 0.9, transparent: true, opacity: 0.85 })
+);
+lava.position.set(0, -110, 0);
+scene.add(lava);
+
+function updateLava(lavaY) {
+    // The lava box's top face tracks lavaY; its bulk extends far below so it always fills upward.
+    lava.position.y = lavaY - 100;
+}
 
 const platformMeshesByLevelIndex = [];
 
@@ -280,6 +292,36 @@ function updateExplosions() {
     }
 }
 
+const lightIndicatorEl = document.getElementById('lightIndicator');
+const scrambleIndicatorEl = document.getElementById('scrambleIndicator');
+const paywallOverlayEl = document.getElementById('paywallOverlay');
+const paywallTextEl = document.getElementById('paywallText');
+
+let isShaking = false;
+
+function syncGimmick(g) {
+    lightIndicatorEl.classList.remove('hidden');
+    lightIndicatorEl.classList.toggle('red', g.redLight);
+    lightIndicatorEl.classList.toggle('green', !g.redLight);
+    lightIndicatorEl.textContent = g.redLight ? 'RED LIGHT' : 'GREEN LIGHT';
+
+    scrambleIndicatorEl.classList.toggle('hidden', !g.scrambled);
+    isShaking = g.shaking;
+    updateLava(g.lavaY);
+}
+
+let paywallTimeoutId = null;
+
+function showPaywall() {
+    paywallTextEl.textContent = 'PAY UP';
+    paywallOverlayEl.classList.remove('hidden');
+    if (paywallTimeoutId) clearTimeout(paywallTimeoutId);
+    paywallTimeoutId = setTimeout(() => {
+        paywallOverlayEl.classList.add('hidden');
+        paywallTimeoutId = null;
+    }, 1500);
+}
+
 let ws;
 let lastSentInput = null;
 
@@ -334,6 +376,10 @@ function connect() {
 
             syncMeteors(msg.meteors || []);
             processExplosions(msg.explosions || []);
+            if (msg.gimmick) syncGimmick(msg.gimmick);
+
+        } else if (msg.type === 'paywall') {
+            showPaywall();
 
         } else if (msg.type === 'admin_auth_result') {
             if (msg.ok) {
@@ -597,6 +643,11 @@ function animate() {
                 me.mesh.position.z
             ));
         }
+    }
+
+    if (isShaking) {
+        camera.position.x += (Math.random() - 0.5) * 0.3;
+        camera.position.y += (Math.random() - 0.5) * 0.3;
     }
 
     renderer.render(scene, camera);
