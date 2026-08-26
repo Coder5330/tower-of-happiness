@@ -3,7 +3,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { buildObjects, advanceMovingPlatforms, createPlayer, resolveMovement, resolvePush, applyPendingMove } = require('./physics');
+const { buildObjects, advanceMovingPlatforms, createPlayer, resolveMovement, resolvePush, applyPendingMove, applyDismounts } = require('./physics');
 const { level, SPAWN_POSITION, TOWER_HEIGHT } = require('./levels');
 
 const PORT = process.env.PORT || 8080;
@@ -205,6 +205,7 @@ setInterval(() => {
         for (const { player } of players.values()) {
             player.pushDelta.x = 0;
             player.pushDelta.z = 0;
+            player.pushBlockedThisTick = false;
         }
 
         for (const [id, { player }] of players.entries()) {
@@ -231,6 +232,11 @@ setInterval(() => {
 
                 const blockedX = attempted.x - result.x;
                 const blockedZ = attempted.z - result.z;
+                if (blockedX !== 0 || blockedZ !== 0) {
+                    player.pushBlockedThisTick = true;
+                    player.lastPushDirX = attempted.x;
+                    player.lastPushDirZ = attempted.z;
+                }
                 if (result.blockedByX && blockedX !== 0) {
                     const entry = forwarded.get(result.blockedByX) || { x: 0, z: 0 };
                     entry.x += blockedX;
@@ -250,6 +256,8 @@ setInterval(() => {
                 targetPlayer.pushDelta.z += delta.z;
             }
         }
+
+        applyDismounts(Array.from(players.values(), (e) => e.player));
 
         advanceMovingPlatforms(objects);
         for (const { player } of players.values()) {

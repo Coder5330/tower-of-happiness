@@ -208,12 +208,15 @@ function connect() {
                 platformMeshesByLevelIndex.push(addPlatform(p));
             });
             ensurePlayerMesh(myId);
+            logToConsole('Press "/" to chat');
 
         } else if (msg.type === 'join') {
             ensurePlayerMesh(msg.id);
+            if (msg.id !== myId) logToConsole(`[PLAYER${msg.id} HAS JOINED THE GAME]`);
 
         } else if (msg.type === 'leave') {
             removePlayerMesh(msg.id);
+            logToConsole(`[PLAYER${msg.id} HAS LEFT THE GAME]`);
 
         } else if (msg.type === 'state') {
             for (const [idStr, pos] of Object.entries(msg.players)) {

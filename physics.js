@@ -157,7 +157,38 @@ function createPlayer() {
         pushDelta: { x: 0, z: 0 },
         frameDelta: { x: 0, y: 0, z: 0 },
         admin: { authed: false, fly: false, speedMult: 1, gravityMult: 1, jumpMult: 1 },
+        isPlayerRef: true,
+        pushBlockedThisTick: false,
     };
+}
+
+// If a player carrying a rider gets shoved into something solid (a wall, another
+// player) this tick, the rider falls off instead of staying glued to the mount —
+// stacking only holds while nothing is obstructing the mount's push.
+function applyDismounts(playerList) {
+    for (const rider of playerList) {
+        const mount = rider.ridingPlatform;
+        if (!mount || !mount.isPlayerRef || !mount.pushBlockedThisTick) continue;
+
+        rider.ridingPlatform = null;
+        rider.on_ground = false;
+
+        let awayX = rider.position.x - mount.position.x;
+        let awayZ = rider.position.z - mount.position.z;
+        let mag = Math.hypot(awayX, awayZ);
+        if (mag < 0.001) {
+            // Rider and mount are stacked dead-center — fall off back the way the
+            // push came from, not further into whatever blocked the mount.
+            awayX = -mount.lastPushDirX || 0;
+            awayZ = -mount.lastPushDirZ || 0;
+            mag = Math.hypot(awayX, awayZ);
+        }
+        if (mag < 0.001) { awayX = 1; awayZ = 0; } else { awayX /= mag; awayZ /= mag; }
+
+        rider.position.x += awayX * (PLAYER_SIZE.width + 0.1);
+        rider.position.z += awayZ * (PLAYER_SIZE.depth + 0.1);
+        rider.y_vel = Math.max(rider.y_vel, 0.08);
+    }
 }
 
 function resolveMovement(player, objects, keys, otherPlayers) {
@@ -342,4 +373,4 @@ function applyPendingMove(player, objects) {
     player.frameDelta = { x: dx, y: dy, z: dz };
 }
 
-module.exports = { buildObjects, advanceMovingPlatforms, createPlayer, resolveMovement, resolvePush, applyPendingMove };
+module.exports = { buildObjects, advanceMovingPlatforms, createPlayer, resolveMovement, resolvePush, applyPendingMove, applyDismounts };
