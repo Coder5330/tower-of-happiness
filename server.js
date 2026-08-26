@@ -131,7 +131,6 @@ function stepMeteors() {
 
 const RED_LIGHT_TICKS = 300;
 const GREEN_LIGHT_TICKS = 540;
-const SCRAMBLE_INTERVAL_TICKS = 720;
 const SHAKE_CHANCE_PER_TICK = 0.0015;
 const SHAKE_TICKS = 10;
 const LAVA_RISE_PER_TICK = 0.03;
@@ -144,8 +143,6 @@ const gimmick = {
     redLight: false,
     redLightTimer: 0,
     greenLightTimer: GREEN_LIGHT_TICKS,
-    scrambled: false,
-    scrambleTimer: SCRAMBLE_INTERVAL_TICKS,
     shaking: false,
     shakeTicks: 0,
     lavaY: LAVA_START_Y,
@@ -181,21 +178,6 @@ function enforceRedLight() {
         const k = player.keys;
         if (k.w || k.a || k.s || k.d || k.jump || k.down) respawnPlayer(player);
     }
-}
-
-function stepScramble() {
-    gimmick.scrambleTimer--;
-    if (gimmick.scrambleTimer <= 0) {
-        gimmick.scrambled = !gimmick.scrambled;
-        gimmick.scrambleTimer = SCRAMBLE_INTERVAL_TICKS;
-    }
-}
-
-// W/S and A/D swapped while scrambled — resolveMovement itself stays untouched,
-// we just hand it a remapped view of the held keys.
-function scrambledKeys(keys) {
-    if (!gimmick.scrambled) return keys;
-    return { w: keys.s, a: keys.d, s: keys.w, d: keys.a, jump: keys.jump, down: keys.down };
 }
 
 function stepShake() {
@@ -235,7 +217,6 @@ function stepPaywall() {
 function stepGimmicks() {
     stepRedLight();
     enforceRedLight();
-    stepScramble();
     stepShake();
     stepLava();
     stepPaywall();
@@ -426,7 +407,6 @@ function broadcastState() {
     const explosionState = pendingExplosions.splice(0, pendingExplosions.length);
     const gimmickState = {
         redLight: gimmick.redLight,
-        scrambled: gimmick.scrambled,
         shaking: gimmick.shaking,
         lavaY: gimmick.lavaY,
     };
@@ -459,7 +439,7 @@ setInterval(() => {
             for (const [otherId, { player: op }] of players.entries()) {
                 if (otherId !== id) otherPlayers.push(op);
             }
-            resolveMovement(player, objects, scrambledKeys(player.keys), otherPlayers);
+            resolveMovement(player, objects, player.keys, otherPlayers);
         }
 
         const PUSH_CHAIN_ITERATIONS = 6;
