@@ -297,14 +297,13 @@ const chatLogEl = document.getElementById('chatLog');
 const adminConsoleInputEl = document.getElementById('adminConsoleInput');
 const adminPanelEl = document.getElementById('adminPanel');
 
-const CHAT_MAX_LINES = 50;
+const CHAT_MAX_LINES = 6;
 
 function logToConsole(text) {
     const line = document.createElement('div');
     line.textContent = text;
     chatLogEl.appendChild(line);
     while (chatLogEl.children.length > CHAT_MAX_LINES) chatLogEl.removeChild(chatLogEl.firstChild);
-    chatLogEl.scrollTop = chatLogEl.scrollHeight;
 }
 
 const KNOWN_COMMANDS = ['help', 'login', 'admin', 'fly', 'speed', 'gravity', 'jump', 'teleport', 'logout'];

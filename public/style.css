@@ -19,15 +19,16 @@ canvas {
   left: 12px;
   bottom: 48px;
   width: min(480px, 90vw);
-  max-height: 160px;
-  overflow-y: auto;
+  max-width: 100%;
+  overflow-x: hidden;
+  overflow-y: hidden;
   z-index: 9;
   font-family: monospace;
   font-size: 13px;
   color: #eee;
-  white-space: pre-wrap;
   pointer-events: none;
   text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9);
+  box-sizing: border-box;
 }
 
 #chatLog div {
@@ -35,7 +36,10 @@ canvas {
   padding: 1px 4px;
   margin-top: 2px;
   border-radius: 2px;
-  width: fit-content;
+  max-width: 100%;
+  box-sizing: border-box;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 #adminConsole {

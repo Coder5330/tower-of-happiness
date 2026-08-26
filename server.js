@@ -16,6 +16,7 @@ const BROADCAST_EVERY_N_TICKS = 2;
 const objects = buildObjects();
 const players = new Map();
 let nextId = 1;
+const freeIds = [];
 
 const ADMIN_CODE = process.env.ADMIN_CODE || crypto.randomBytes(6).toString('hex');
 if (!process.env.ADMIN_CODE) {
@@ -26,6 +27,19 @@ const AUTH_MAX_FAILS = 5;
 const AUTH_LOCKOUT_MS = 30000;
 const CHAT_MAX_LEN = 200;
 const CHAT_MIN_INTERVAL_MS = 300;
+
+// Keyed by IP rather than per-connection, so opening another tab/socket doesn't
+// reset the fail counter and sidestep the lockout.
+const ipAuthState = new Map();
+
+function getAuthState(ip) {
+    let state = ipAuthState.get(ip);
+    if (!state) {
+        state = { fails: 0, lockUntil: 0 };
+        ipAuthState.set(ip, state);
+    }
+    return state;
+}
 
 function timingSafeEqualStrings(a, b) {
     const bufA = Buffer.from(String(a));
@@ -70,11 +84,12 @@ httpServer.listen(PORT, () => {
     console.log(`Serving game + WebSocket on :${PORT}`);
 });
 
-wss.on('connection', (ws) => {
-    const id = nextId++;
+wss.on('connection', (ws, req) => {
+    const id = freeIds.length ? freeIds.shift() : nextId++;
+    const ip = req.socket.remoteAddress;
     const player = createPlayer();
     player.keys = { w: false, a: false, s: false, d: false, jump: false, down: false };
-    const entry = { ws, player, authFails: 0, authLockUntil: 0, lastChatAt: 0 };
+    const entry = { ws, player, lastChatAt: 0 };
     players.set(id, entry);
 
     ws.send(JSON.stringify({ type: 'welcome', id, level }));
@@ -107,19 +122,20 @@ wss.on('connection', (ws) => {
 
         if (msg.type === 'admin_auth') {
             const now = Date.now();
-            if (now < entry.authLockUntil) {
+            const authState = getAuthState(ip);
+            if (now < authState.lockUntil) {
                 ws.send(JSON.stringify({ type: 'admin_auth_result', ok: false, locked: true }));
                 return;
             }
             const ok = typeof msg.code === 'string' && timingSafeEqualStrings(msg.code, ADMIN_CODE);
             if (ok) {
-                entry.authFails = 0;
+                authState.fails = 0;
                 entry.player.admin.authed = true;
             } else {
-                entry.authFails++;
-                if (entry.authFails >= AUTH_MAX_FAILS) {
-                    entry.authLockUntil = now + AUTH_LOCKOUT_MS;
-                    entry.authFails = 0;
+                authState.fails++;
+                if (authState.fails >= AUTH_MAX_FAILS) {
+                    authState.lockUntil = now + AUTH_LOCKOUT_MS;
+                    authState.fails = 0;
                 }
             }
             ws.send(JSON.stringify({ type: 'admin_auth_result', ok }));
@@ -163,6 +179,7 @@ wss.on('connection', (ws) => {
 
     ws.on('close', () => {
         players.delete(id);
+        freeIds.push(id);
         broadcastRaw({ type: 'leave', id });
     });
 
