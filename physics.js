@@ -1,7 +1,7 @@
 const {
     PLAYER_SIZE, PLAYER_SPEED, JUMP_VELOCITY, GRAVITY, TERMINAL_VELOCITY,
     SPAWN_POSITION, ground, level,
-} = require('./levelData');
+} = require('./levels');
 
 function collidebox(posA, sizeA, posB, sizeB) {
     const halfA = { x: sizeA.width / 2, y: sizeA.height / 2, z: sizeA.depth / 2 };
