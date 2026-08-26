@@ -184,17 +184,30 @@ function removePlayerMesh(id) {
     remotePlayers.delete(id);
 }
 
-const METEOR_RADIUS = 0.6;
 const meteorMeshes = new Map();
-const meteorGeometry = new THREE.SphereGeometry(METEOR_RADIUS, 10, 10);
-const meteorMaterial = new THREE.MeshStandardMaterial({ color: 0xff3300, emissive: 0x992200, emissiveIntensity: 0.8 });
+const meteorGeometry = new THREE.SphereGeometry(1, 12, 12);
+const meteorMaterial = new THREE.MeshStandardMaterial({ color: 0xff3300, emissive: 0x992200, emissiveIntensity: 0.9 });
+const homingMeteorMaterial = new THREE.MeshStandardMaterial({ color: 0xff0055, emissive: 0xaa0033, emissiveIntensity: 1.1 });
 
-function ensureMeteorMesh(id, pos) {
+const shadowGeometry = new THREE.CircleGeometry(1, 24);
+const shadowMaterial = new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0, depthWrite: false });
+const homingShadowMaterial = new THREE.MeshBasicMaterial({ color: 0xff2200, transparent: true, opacity: 0, depthWrite: false });
+
+function ensureMeteorMesh(id, m) {
     if (meteorMeshes.has(id)) return meteorMeshes.get(id);
-    const mesh = new THREE.Mesh(meteorGeometry, meteorMaterial);
-    mesh.position.set(pos.x, pos.y, pos.z);
+
+    const mesh = new THREE.Mesh(meteorGeometry, m.homing ? homingMeteorMaterial : meteorMaterial);
+    mesh.scale.setScalar(m.radius);
+    mesh.position.set(m.x, m.y, m.z);
     scene.add(mesh);
-    const entry = { mesh, target: { ...pos } };
+
+    const shadow = new THREE.Mesh(shadowGeometry, (m.homing ? homingShadowMaterial : shadowMaterial).clone());
+    shadow.scale.setScalar(m.radius * 1.4);
+    shadow.rotation.x = -Math.PI / 2;
+    shadow.position.set(m.landingX, 0.03, m.landingZ);
+    scene.add(shadow);
+
+    const entry = { mesh, shadow, shadowY: m.shadowY, target: { x: m.x, y: m.y, z: m.z } };
     meteorMeshes.set(id, entry);
     return entry;
 }
@@ -207,12 +220,63 @@ function syncMeteors(meteorList) {
         entry.target.x = m.x;
         entry.target.y = m.y;
         entry.target.z = m.z;
+
+        const warnRatio = Math.min(1, Math.max(0, 1 - (m.y - 0) / (entry.shadowY - 0)));
+        entry.shadow.material.opacity = warnRatio * 0.6;
     }
     for (const [id, entry] of meteorMeshes.entries()) {
         if (!seen.has(id)) {
             scene.remove(entry.mesh);
+            scene.remove(entry.shadow);
+            entry.shadow.material.dispose();
             meteorMeshes.delete(id);
         }
+    }
+}
+
+const activeExplosions = [];
+
+function spawnExplosion(pos, radius) {
+    const duration = 450;
+    const sphere = new THREE.Mesh(
+        new THREE.SphereGeometry(1, 12, 12),
+        new THREE.MeshBasicMaterial({ color: 0xffaa33, transparent: true, opacity: 0.9 })
+    );
+    sphere.position.set(pos.x, pos.y, pos.z);
+    scene.add(sphere);
+
+    const ring = new THREE.Mesh(
+        new THREE.RingGeometry(0.6, 1, 24),
+        new THREE.MeshBasicMaterial({ color: 0xff6600, transparent: true, opacity: 0.8, side: THREE.DoubleSide })
+    );
+    ring.rotation.x = -Math.PI / 2;
+    ring.position.set(pos.x, 0.05, pos.z);
+    scene.add(ring);
+
+    activeExplosions.push({ sphere, ring, start: performance.now(), duration, baseRadius: Math.max(0.5, radius) });
+}
+
+function processExplosions(explosionList) {
+    for (const ex of explosionList) spawnExplosion(ex, ex.radius);
+}
+
+function updateExplosions() {
+    const now = performance.now();
+    for (let i = activeExplosions.length - 1; i >= 0; i--) {
+        const ex = activeExplosions[i];
+        const t = (now - ex.start) / ex.duration;
+        if (t >= 1) {
+            scene.remove(ex.sphere);
+            scene.remove(ex.ring);
+            ex.sphere.material.dispose();
+            ex.ring.material.dispose();
+            activeExplosions.splice(i, 1);
+            continue;
+        }
+        ex.sphere.scale.setScalar(ex.baseRadius * (1 + t * 2.5));
+        ex.sphere.material.opacity = 0.9 * (1 - t);
+        ex.ring.scale.setScalar(ex.baseRadius * (1 + t * 5));
+        ex.ring.material.opacity = 0.8 * (1 - t);
     }
 }
 
@@ -269,6 +333,7 @@ function connect() {
             }
 
             syncMeteors(msg.meteors || []);
+            processExplosions(msg.explosions || []);
 
         } else if (msg.type === 'admin_auth_result') {
             if (msg.ok) {
@@ -488,6 +553,8 @@ function animate() {
         entry.mesh.position.y += (entry.target.y - entry.mesh.position.y) * LERP_RATE;
         entry.mesh.position.z += (entry.target.z - entry.mesh.position.z) * LERP_RATE;
     }
+
+    updateExplosions();
 
     const me = remotePlayers.get(myId);
     const playerHeight = 2;
