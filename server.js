@@ -3,8 +3,9 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { buildObjects, advanceMovingPlatforms, createPlayer, resolveMovement, resolvePush, applyPendingMove, applyDismounts, respawnPlayer } = require('./physics');
+const { buildObjects, advanceMovingPlatforms, createPlayer, resolveMovement, resolvePush, applyPendingMove, applyDismounts, respawnPlayer, hitTestFor } = require('./physics');
 const { level, SPAWN_POSITION, TOWER_HEIGHT, GROUND_AREA, PLAYER_SIZE } = require('./levels');
+const { recordWin } = require('./db');
 
 const PORT = process.env.PORT || 8080;
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -75,6 +76,18 @@ function meteorHitsPlayer(meteor, player) {
     return (dx * dx + dy * dy + dz * dz) < meteor.radius * meteor.radius;
 }
 
+// Ground is objects[0] and every tower platform is in there too, so this single
+// scan covers "meteor lands on the ground" and "meteor gets intercepted by a
+// platform" the same way — approximating the meteor as a bounding cube.
+function meteorHitsSolid(meteor) {
+    const size = { width: meteor.radius * 2, height: meteor.radius * 2, depth: meteor.radius * 2 };
+    const pos = { x: meteor.x, y: meteor.y, z: meteor.z };
+    for (const object of objects) {
+        if (hitTestFor(object, size)(pos)) return true;
+    }
+    return false;
+}
+
 function stepMeteors() {
     ticksUntilMeteor--;
     if (ticksUntilMeteor <= 0) {
@@ -97,11 +110,11 @@ function stepMeteors() {
             }
         }
 
-        const landed = meteor.y - meteor.radius <= GROUND_Y;
-        if (hit || landed) {
+        const intercepted = meteorHitsSolid(meteor);
+        if (hit || intercepted) {
             pendingExplosions.push({ x: meteor.x, y: Math.max(meteor.y, GROUND_Y), z: meteor.z, radius: meteor.radius });
         }
-        if (hit || landed || meteor.y < METEOR_DESPAWN_Y) meteors.splice(i, 1);
+        if (hit || intercepted || meteor.y < METEOR_DESPAWN_Y) meteors.splice(i, 1);
     }
 }
 
@@ -143,6 +156,42 @@ function stepLava() {
 
 function stepGimmicks() {
     stepLava();
+}
+
+// --- Round: reach the top before the 5-minute clock runs out to win ---
+
+const ROUND_DURATION_MS = 5 * 60 * 1000;
+const WIN_HEIGHT = TOWER_HEIGHT - 3; // reaching the top platform counts as the win
+
+let roundEndAt = Date.now() + ROUND_DURATION_MS;
+
+function resetRound() {
+    roundEndAt = Date.now() + ROUND_DURATION_MS;
+    gimmick.lavaY = LAVA_START_Y;
+    for (const { player } of players.values()) {
+        player.ghost = false;
+        respawnPlayer(player);
+    }
+}
+
+function stepRound() {
+    const now = Date.now();
+
+    for (const [id, { player }] of players.entries()) {
+        if (isImmune(player)) continue; // ghosts and flying admins can't win
+        if (player.position.y < WIN_HEIGHT) continue;
+
+        const secondsLeft = Math.max(0, (roundEndAt - now) / 1000);
+        broadcastRaw({ type: 'round_result', winner: id, secondsLeft });
+        recordWin(secondsLeft);
+        resetRound();
+        return;
+    }
+
+    if (now >= roundEndAt) {
+        broadcastRaw({ type: 'round_result', winner: null, secondsLeft: 0 });
+        resetRound();
+    }
 }
 
 // Keyed by IP rather than per-connection, so opening another tab/socket doesn't
@@ -334,6 +383,7 @@ function broadcastState() {
     broadcastRaw({
         type: 'state', players: playerState, platforms, meteors: meteorState,
         explosions: explosionState, gimmick: gimmickState,
+        roundMsLeft: Math.max(0, roundEndAt - Date.now()),
     });
 }
 
@@ -412,6 +462,7 @@ setInterval(() => {
         }
 
         stepMeteors();
+        stepRound();
 
         tickCount++;
         if (tickCount % BROADCAST_EVERY_N_TICKS === 0) broadcastState();

@@ -380,5 +380,5 @@ function applyPendingMove(player, objects) {
 
 module.exports = {
     buildObjects, advanceMovingPlatforms, createPlayer, resolveMovement, resolvePush,
-    applyPendingMove, applyDismounts, respawnPlayer,
+    applyPendingMove, applyDismounts, respawnPlayer, hitTestFor,
 };
