@@ -67,7 +67,24 @@ function updateLava(lavaY) {
     lava.position.y = lavaY - 100;
 }
 
-const platformMeshesByLevelIndex = [];
+let platformMeshesByLevelIndex = [];
+
+function clearPlatforms() {
+    for (const mesh of platformMeshesByLevelIndex) {
+        scene.remove(mesh);
+        mesh.geometry.dispose();
+        mesh.material.dispose();
+    }
+    platformMeshesByLevelIndex = [];
+    collidableMeshes.length = 1; // keep just [ground]
+}
+
+function loadLevel(levelData) {
+    clearPlatforms();
+    levelData.forEach((p) => {
+        platformMeshesByLevelIndex.push(addPlatform(p));
+    });
+}
 
 function addPlatform(p) {
     let geometry;
@@ -189,9 +206,20 @@ const lobbyPlayerListEl = document.getElementById('lobbyPlayerList');
 const startRoundBtnEl = document.getElementById('startRoundBtn');
 const createRoomInputEl = document.getElementById('createRoomInput');
 const createRoomBtnEl = document.getElementById('createRoomBtn');
+const practiceToggleBtnEl = document.getElementById('practiceToggleBtn');
+const practicePickerEl = document.getElementById('practicePicker');
+const joinPendingNoteEl = document.getElementById('joinPendingNote');
+const hostTowerRowEl = document.getElementById('hostTowerRow');
+const hostTowerSelectEl = document.getElementById('hostTowerSelect');
+const joinRequestsPanelEl = document.getElementById('joinRequestsPanel');
+const towerChoiceModalEl = document.getElementById('towerChoiceModal');
+const towerChoiceOptionsEl = document.getElementById('towerChoiceOptions');
+const towerChoiceWaitingNoteEl = document.getElementById('towerChoiceWaitingNote');
 
 let myRoomKind = null;
 let currentPhase = null;
+let myIsHost = false;
+let towerPool = [];
 
 function renderRoomList(rooms) {
     roomListEl.innerHTML = '';
@@ -248,6 +276,100 @@ createRoomBtnEl.addEventListener('click', sendCreateRoom);
 createRoomInputEl.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') sendCreateRoom();
 });
+
+function renderPracticePicker() {
+    practicePickerEl.innerHTML = '';
+    for (const tower of towerPool) {
+        const btn = document.createElement('button');
+        btn.className = 'towerOption';
+        btn.textContent = tower.name;
+        btn.addEventListener('click', () => {
+            if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'start_practice', towerId: tower.id }));
+        });
+        practicePickerEl.appendChild(btn);
+    }
+}
+
+practiceToggleBtnEl.addEventListener('click', () => {
+    if (practicePickerEl.classList.contains('hidden') && !practicePickerEl.children.length) renderPracticePicker();
+    practicePickerEl.classList.toggle('hidden');
+});
+
+function renderHostTowerSelect() {
+    hostTowerSelectEl.innerHTML = '';
+    for (const tower of towerPool) {
+        const opt = document.createElement('option');
+        opt.value = tower.id;
+        opt.textContent = tower.name;
+        hostTowerSelectEl.appendChild(opt);
+    }
+}
+
+hostTowerSelectEl.addEventListener('change', () => {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'set_room_tower', towerId: Number(hostTowerSelectEl.value) }));
+    }
+});
+
+const pendingJoinRequestEls = new Map();
+
+function addJoinRequest(requestId) {
+    const row = document.createElement('div');
+    row.className = 'joinRequestRow';
+    const label = document.createElement('span');
+    label.textContent = 'Someone wants to join';
+    const approveBtn = document.createElement('button');
+    approveBtn.className = 'approveBtn';
+    approveBtn.textContent = 'Approve';
+    approveBtn.addEventListener('click', () => {
+        ws.send(JSON.stringify({ type: 'approve_join', requestId }));
+        removeJoinRequest(requestId);
+    });
+    const denyBtn = document.createElement('button');
+    denyBtn.className = 'denyBtn';
+    denyBtn.textContent = 'Deny';
+    denyBtn.addEventListener('click', () => {
+        ws.send(JSON.stringify({ type: 'deny_join', requestId }));
+        removeJoinRequest(requestId);
+    });
+    row.appendChild(label);
+    row.appendChild(approveBtn);
+    row.appendChild(denyBtn);
+    joinRequestsPanelEl.appendChild(row);
+    joinRequestsPanelEl.classList.remove('hidden');
+    pendingJoinRequestEls.set(requestId, row);
+}
+
+function removeJoinRequest(requestId) {
+    const row = pendingJoinRequestEls.get(requestId);
+    if (row) row.remove();
+    pendingJoinRequestEls.delete(requestId);
+    if (!pendingJoinRequestEls.size) joinRequestsPanelEl.classList.add('hidden');
+}
+
+function showTowerChoice(msg) {
+    if (msg.chooserId === myId) {
+        towerChoiceOptionsEl.innerHTML = '';
+        for (const choice of msg.choices) {
+            const btn = document.createElement('button');
+            btn.textContent = choice.name;
+            btn.addEventListener('click', () => {
+                ws.send(JSON.stringify({ type: 'choose_next_tower', towerId: choice.id }));
+                towerChoiceModalEl.classList.add('hidden');
+            });
+            towerChoiceOptionsEl.appendChild(btn);
+        }
+        towerChoiceModalEl.classList.remove('hidden');
+    } else {
+        towerChoiceWaitingNoteEl.textContent = `Player ${msg.chooserId} is picking the next tower…`;
+        towerChoiceWaitingNoteEl.classList.remove('hidden');
+    }
+}
+
+function hideTowerChoice() {
+    towerChoiceModalEl.classList.add('hidden');
+    towerChoiceWaitingNoteEl.classList.add('hidden');
+}
 
 function formatRoundTime(msLeft) {
     const totalSeconds = Math.max(0, Math.ceil(msLeft / 1000));
@@ -410,28 +532,50 @@ function connect() {
         const msg = JSON.parse(event.data);
 
         if (msg.type === 'rooms') {
+            if (msg.towerPool) towerPool = msg.towerPool;
             renderRoomList(msg.rooms);
 
         } else if (msg.type === 'room_created') {
             ws.send(JSON.stringify({ type: 'join_room', room: msg.roomId }));
 
+        } else if (msg.type === 'join_pending') {
+            joinPendingNoteEl.classList.remove('hidden');
+
         } else if (msg.type === 'join_error') {
+            joinPendingNoteEl.classList.add('hidden');
             if (msg.reason === 'full') alert('That room is full (8/8 players).');
+            else if (msg.reason === 'denied') alert('The host denied your request to join.');
+            else if (msg.reason === 'host_left') alert('The host left before approving your request.');
 
         } else if (msg.type === 'welcome') {
             myId = msg.id;
             myRoomKind = msg.roomKind;
             currentPhase = msg.phase;
+            myIsHost = !!msg.isHost;
+            if (msg.towerPool) towerPool = msg.towerPool;
             roomMenuEl.classList.add('hidden');
-            msg.level.forEach((p) => {
-                platformMeshesByLevelIndex.push(addPlatform(p));
-            });
+            joinPendingNoteEl.classList.add('hidden');
+            loadLevel(msg.level);
             ensurePlayerMesh(myId);
             updateLobbyVisibility(null);
+            if (myIsHost && myRoomKind === 'main') {
+                renderHostTowerSelect();
+                hostTowerRowEl.classList.remove('hidden');
+            }
             logToConsole('Press "/" to chat');
+
+        } else if (msg.type === 'join_request') {
+            addJoinRequest(msg.requestId);
+
+        } else if (msg.type === 'level') {
+            loadLevel(msg.level);
+
+        } else if (msg.type === 'choose_tower') {
+            showTowerChoice(msg);
 
         } else if (msg.type === 'phase') {
             currentPhase = msg.phase;
+            if (msg.phase !== 'choosing') hideTowerChoice();
             updateLobbyVisibility(null);
 
         } else if (msg.type === 'join') {
@@ -471,6 +615,7 @@ function connect() {
             if (msg.gimmick) syncGimmick(msg.gimmick);
 
             currentPhase = msg.phase;
+            if (msg.phase !== 'choosing') hideTowerChoice();
             updateLobbyVisibility(msg.players);
             roundTimerEl.classList.toggle('hidden', typeof msg.roundMsLeft !== 'number');
             if (typeof msg.roundMsLeft === 'number') roundTimerEl.textContent = formatRoundTime(msg.roundMsLeft);

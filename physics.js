@@ -97,11 +97,11 @@ function hitTestFor(object, sizeA) {
     }
 }
 
-function buildObjects() {
+function buildObjects(customLevel) {
     const objects = [
         { position: { x: ground.x, y: ground.y, z: ground.z }, width: ground.width, height: ground.height, depth: ground.depth },
     ];
-    for (const p of level) {
+    for (const p of customLevel || level) {
         objects.push({
             position: { x: p.x, y: p.y, z: p.z },
             shape: p.shape,

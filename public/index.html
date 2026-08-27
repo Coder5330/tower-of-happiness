@@ -16,13 +16,28 @@
                 <input id="createRoomInput" type="text" maxlength="30" placeholder="New room name (optional)" />
                 <button id="createRoomBtn">Create Room</button>
             </div>
+            <button id="practiceToggleBtn">Practice — pick a tower</button>
+            <div id="practicePicker" class="hidden"></div>
+            <div id="joinPendingNote" class="hidden">Waiting for the host to approve your join…</div>
         </div>
 
         <div id="lobbyPanel" class="hidden">
             <div class="lobbyTitle">Waiting for players</div>
             <div id="lobbyPlayerList"></div>
             <button id="startRoundBtn">Start</button>
+            <div id="hostTowerRow" class="hidden">
+                <span>Tower:</span>
+                <select id="hostTowerSelect"></select>
+            </div>
         </div>
+
+        <div id="joinRequestsPanel" class="hidden"></div>
+
+        <div id="towerChoiceModal" class="hidden">
+            <div class="towerChoiceTitle">You won! Pick the next tower</div>
+            <div id="towerChoiceOptions"></div>
+        </div>
+        <div id="towerChoiceWaitingNote" class="hidden"></div>
 
         <div id="chatLog"></div>
 
@@ -48,6 +63,6 @@
         </div>
 
         <script src="https://unpkg.com/three@0.160.0/build/three.min.js"></script>
-        <script src="script.js?v=18"></script>
+        <script src="script.js?v=19"></script>
     </body>
 </html>
