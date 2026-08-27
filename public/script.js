@@ -187,6 +187,8 @@ const roomListEl = document.getElementById('roomList');
 const lobbyPanelEl = document.getElementById('lobbyPanel');
 const lobbyPlayerListEl = document.getElementById('lobbyPlayerList');
 const startRoundBtnEl = document.getElementById('startRoundBtn');
+const createRoomInputEl = document.getElementById('createRoomInput');
+const createRoomBtnEl = document.getElementById('createRoomBtn');
 
 let myRoomKind = null;
 let currentPhase = null;
@@ -194,16 +196,30 @@ let currentPhase = null;
 function renderRoomList(rooms) {
     roomListEl.innerHTML = '';
     for (const room of rooms) {
+        const full = room.players >= room.maxPlayers;
         const el = document.createElement('div');
         el.className = 'roomOption';
-        const label = room.kind === 'practice' ? 'Practice' : 'Main Game';
-        const meta = room.kind === 'practice'
-            ? `${room.players} here — no hazards, just climb`
-            : `${room.players} here — ${room.phase === 'waiting' ? 'waiting to start' : 'round in progress'}`;
-        el.innerHTML = `<span class="roomOptionName">${label}</span><span class="roomOptionMeta">${meta}</span>`;
-        el.addEventListener('click', () => {
-            if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'join_room', room: room.id }));
-        });
+        if (full) el.classList.add('roomOptionFull');
+
+        const nameEl = document.createElement('span');
+        nameEl.className = 'roomOptionName';
+        nameEl.textContent = room.name || (room.kind === 'practice' ? 'Practice' : 'Main Game');
+
+        const metaEl = document.createElement('span');
+        metaEl.className = 'roomOptionMeta';
+        const status = room.kind === 'practice'
+            ? 'no hazards, just climb'
+            : (room.phase === 'waiting' ? 'waiting to start' : 'round in progress');
+        metaEl.textContent = `${room.players}/${room.maxPlayers} — ${full ? 'full' : status}`;
+
+        el.appendChild(nameEl);
+        el.appendChild(metaEl);
+
+        if (!full) {
+            el.addEventListener('click', () => {
+                if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'join_room', room: room.id }));
+            });
+        }
         roomListEl.appendChild(el);
     }
 }
@@ -221,6 +237,16 @@ function updateLobbyVisibility(playersObj) {
 
 startRoundBtnEl.addEventListener('click', () => {
     if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'start_round' }));
+});
+
+function sendCreateRoom() {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    ws.send(JSON.stringify({ type: 'create_room', name: createRoomInputEl.value }));
+    createRoomInputEl.value = '';
+}
+createRoomBtnEl.addEventListener('click', sendCreateRoom);
+createRoomInputEl.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') sendCreateRoom();
 });
 
 function formatRoundTime(msLeft) {
@@ -385,6 +411,12 @@ function connect() {
 
         if (msg.type === 'rooms') {
             renderRoomList(msg.rooms);
+
+        } else if (msg.type === 'room_created') {
+            ws.send(JSON.stringify({ type: 'join_room', room: msg.roomId }));
+
+        } else if (msg.type === 'join_error') {
+            if (msg.reason === 'full') alert('That room is full (8/8 players).');
 
         } else if (msg.type === 'welcome') {
             myId = msg.id;
