@@ -171,6 +171,27 @@ let angleX = 0;
 
 const remotePlayers = new Map();
 const ghostHintEl = document.getElementById('ghostHint');
+const roundTimerEl = document.getElementById('roundTimer');
+const roundBannerEl = document.getElementById('roundBanner');
+
+function formatRoundTime(msLeft) {
+    const totalSeconds = Math.max(0, Math.ceil(msLeft / 1000));
+    const m = Math.floor(totalSeconds / 60);
+    const s = totalSeconds % 60;
+    return `${m}:${String(s).padStart(2, '0')}`;
+}
+
+let roundBannerTimeoutId = null;
+
+function showRoundBanner(text) {
+    roundBannerEl.textContent = text;
+    roundBannerEl.classList.remove('hidden');
+    if (roundBannerTimeoutId) clearTimeout(roundBannerTimeoutId);
+    roundBannerTimeoutId = setTimeout(() => {
+        roundBannerEl.classList.add('hidden');
+        roundBannerTimeoutId = null;
+    }, 3500);
+}
 
 function colorForPlayer(id) {
     return id === myId ? 0xff4500 : 0x3498db;
@@ -356,6 +377,19 @@ function connect() {
             syncMeteors(msg.meteors || []);
             processExplosions(msg.explosions || []);
             if (msg.gimmick) syncGimmick(msg.gimmick);
+            if (typeof msg.roundMsLeft === 'number') roundTimerEl.textContent = formatRoundTime(msg.roundMsLeft);
+
+        } else if (msg.type === 'round_result') {
+            if (msg.winner === myId) {
+                showRoundBanner('YOU WIN!');
+            } else if (msg.winner !== null) {
+                showRoundBanner(`PLAYER ${msg.winner} WINS!`);
+            } else {
+                showRoundBanner("TIME'S UP — NO WINNER");
+            }
+            logToConsole(msg.winner !== null
+                ? `[PLAYER${msg.winner} REACHED THE TOP AND WON THE ROUND]`
+                : '[ROUND OVER — NOBODY REACHED THE TOP IN TIME]');
 
         } else if (msg.type === 'admin_auth_result') {
             if (msg.ok) {
