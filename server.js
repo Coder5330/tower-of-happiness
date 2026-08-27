@@ -4,8 +4,9 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { buildObjects, advanceMovingPlatforms, createPlayer, resolveMovement, resolvePush, applyPendingMove, applyDismounts, respawnPlayer, hitTestFor } = require('./physics');
-const { level, SPAWN_POSITION, TOWER_HEIGHT, GROUND_AREA, PLAYER_SIZE } = require('./levels');
+const { SPAWN_POSITION, TOWER_HEIGHT, GROUND_AREA, PLAYER_SIZE } = require('./levels');
 const { recordWin } = require('./db');
+const { TOWER_POOL, buildTowerLevel, randomTowerId, randomTowerChoices } = require('./towers');
 
 const PORT = process.env.PORT || 8080;
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -42,6 +43,8 @@ const LAVA_RESET_ABOVE = TOWER_HEIGHT + 10;
 
 const ROUND_DURATION_MS = 5 * 60 * 1000;
 const WIN_HEIGHT = TOWER_HEIGHT - 3; // reaching the top platform counts as the win
+const TOWER_CHOICE_MS = 15000;
+const TOWER_CHOICE_OPTIONS = 3;
 
 function randomBetween(min, max) {
     return min + Math.random() * (max - min);
@@ -56,25 +59,32 @@ function isImmune(player) {
 }
 
 // --- Rooms ---
-// 'main' rooms run the full competitive loop (lava, meteors, a 5-minute round
-// clock, a win condition) and sit in a 'waiting' lobby between rounds so anyone
-// who joins mid-round never gets dropped into an already-lost game — they just
-// spectate as a ghost until the next round starts. 'practice' is a permanent,
-// hazard-free sandbox: no lava, no meteors, no round clock.
+// 'main'-kind rooms (the fixed Main Game plus any player-created room) run the
+// full competitive loop — lava, meteors, a 5-minute round clock, a win
+// condition — and sit in a 'waiting' lobby between rounds so anyone who joins
+// mid-round never gets dropped into an already-lost game; they spectate as a
+// ghost until the next round starts. 'practice' rooms are private, single
+// player, permanently hazard-free, and let that one player pick any tower.
+// Every room gets its own procedurally generated tower (see towers.js) so no
+// two rooms — or two rounds — necessarily look the same.
 
 const MAX_ROOM_PLAYERS = 8;
 const CUSTOM_ROOM_NAME_MAX_LEN = 30;
 
 const rooms = new Map();
 let nextCustomRoomId = 1;
+let nextJoinRequestId = 1;
 
-function createRoom(id, kind, name, permanent) {
+function createRoom({ id, kind, name, permanent, maxPlayers, towerId, hostWs }) {
     return {
         id,
         kind,
         name,
         permanent,
-        objects: buildObjects(),
+        maxPlayers,
+        hostWs: hostWs || null,
+        towerId,
+        objects: buildObjects(buildTowerLevel(towerId)),
         players: new Map(),
         nextId: 1,
         freeIds: [],
@@ -85,19 +95,40 @@ function createRoom(id, kind, name, permanent) {
         gimmick: { lavaY: LAVA_START_Y },
         phase: kind === 'main' ? 'waiting' : 'practice',
         roundEndAt: null,
+        pendingChoice: null,
+        pendingJoins: new Map(),
         tickCount: 0,
     };
 }
 
-rooms.set('main', createRoom('main', 'main', 'Main Game', true));
-rooms.set('practice', createRoom('practice', 'practice', 'Practice', true));
+rooms.set('main', createRoom({
+    id: 'main', kind: 'main', name: 'Main Game', permanent: true,
+    maxPlayers: MAX_ROOM_PLAYERS, towerId: randomTowerId(),
+}));
 
 // Player-created rooms are competitive ('main' rules) and disappear once the
-// last player leaves, so the room list doesn't grow forever.
-function createCustomRoom(rawName) {
+// last player leaves, so the room list doesn't grow forever. The creator is
+// the host: they approve every join and can pick the room's tower.
+function createCustomRoom(rawName, hostWs) {
     const id = `room-${nextCustomRoomId++}`;
     const name = (typeof rawName === 'string' ? rawName.trim() : '').slice(0, CUSTOM_ROOM_NAME_MAX_LEN) || `Room ${id.split('-')[1]}`;
-    const room = createRoom(id, 'main', name, false);
+    const room = createRoom({
+        id, kind: 'main', name, permanent: false,
+        maxPlayers: MAX_ROOM_PLAYERS, towerId: randomTowerId(), hostWs,
+    });
+    rooms.set(id, room);
+    return room;
+}
+
+// Practice is always a fresh, private room for exactly one player, on
+// whichever tower they picked. Never listed in the shared room list.
+function createPracticeRoom(towerId) {
+    const id = `practice-${nextCustomRoomId++}`;
+    const meta = TOWER_POOL.find((t) => t.id === towerId) || TOWER_POOL[0];
+    const room = createRoom({
+        id, kind: 'practice', name: `Practice (${meta.name})`, permanent: false,
+        maxPlayers: 1, towerId: meta.id,
+    });
     rooms.set(id, room);
     return room;
 }
@@ -108,11 +139,12 @@ function removeRoomIfEmpty(room) {
 }
 
 function roomSummary(room) {
-    return { id: room.id, kind: room.kind, name: room.name, phase: room.phase, players: room.players.size, maxPlayers: MAX_ROOM_PLAYERS };
+    return { id: room.id, kind: room.kind, name: room.name, phase: room.phase, players: room.players.size, maxPlayers: room.maxPlayers };
 }
 
 function roomsSnapshot() {
-    return Array.from(rooms.values(), roomSummary);
+    // Practice rooms are private — never advertised in the shared list.
+    return Array.from(rooms.values()).filter((r) => r.kind !== 'practice').map(roomSummary);
 }
 
 function broadcastRoomsSnapshot() {
@@ -127,6 +159,16 @@ function broadcastRaw(room, msg) {
     for (const { ws } of room.players.values()) {
         if (ws.readyState === ws.OPEN) ws.send(data);
     }
+}
+
+function towerChoiceList(choices) {
+    return choices.map((c) => ({ id: c.id, name: c.name }));
+}
+
+function applyTowerChange(room, towerId) {
+    room.towerId = towerId;
+    room.objects = buildObjects(buildTowerLevel(towerId));
+    broadcastRaw(room, { type: 'level', level: buildTowerLevel(towerId) });
 }
 
 function spawnMeteor(room) {
@@ -215,8 +257,8 @@ function stepLava(room) {
     }
 }
 
-// Between rounds (and permanently, for practice) the room sits in a lobby: no
-// hazards, everyone gets a clean respawn so latecomers and round-losers start level.
+// Between rounds the room sits in a lobby: no hazards, everyone gets a clean
+// respawn so latecomers and round-losers start level.
 function resetToLobby(room) {
     room.phase = room.kind === 'main' ? 'waiting' : 'practice';
     room.gimmick.lavaY = LAVA_START_Y;
@@ -240,8 +282,33 @@ function startRound(room) {
     broadcastRaw(room, { type: 'phase', phase: room.phase });
 }
 
+// After a win, the winner gets ~15s to pick the next tower from 3 random
+// options; a timeout (or the room emptying) falls back to a random pick.
+function beginTowerChoice(room, chooserId) {
+    const choices = randomTowerChoices(TOWER_CHOICE_OPTIONS);
+    room.phase = 'choosing';
+    room.pendingChoice = { chooserId, choices, deadline: Date.now() + TOWER_CHOICE_MS };
+    broadcastRaw(room, { type: 'choose_tower', chooserId, choices: towerChoiceList(choices), deadlineMs: TOWER_CHOICE_MS });
+}
+
+function resolveTowerChoice(room, towerId) {
+    const pending = room.pendingChoice;
+    room.pendingChoice = null;
+    const valid = pending && pending.choices.some((c) => c.id === towerId);
+    const chosenId = valid ? towerId : (pending ? pending.choices[Math.floor(Math.random() * pending.choices.length)].id : randomTowerId());
+    applyTowerChange(room, chosenId);
+    resetToLobby(room);
+}
+
 function stepRound(room) {
-    if (room.kind !== 'main' || room.phase !== 'playing') return;
+    if (room.kind !== 'main') return;
+
+    if (room.phase === 'choosing') {
+        if (room.pendingChoice && Date.now() >= room.pendingChoice.deadline) resolveTowerChoice(room, null);
+        return;
+    }
+
+    if (room.phase !== 'playing') return;
     const now = Date.now();
 
     for (const [id, { player }] of room.players.entries()) {
@@ -251,7 +318,7 @@ function stepRound(room) {
         const secondsLeft = Math.max(0, (room.roundEndAt - now) / 1000);
         broadcastRaw(room, { type: 'round_result', winner: id, secondsLeft });
         recordWin(secondsLeft);
-        resetToLobby(room);
+        beginTowerChoice(room, id);
         return;
     }
 
@@ -285,12 +352,12 @@ function broadcastState(room) {
         type: 'state', players: playerState, platforms, meteors: meteorState,
         explosions: explosionState, gimmick: gimmickState,
         phase: room.phase,
-        roundMsLeft: room.roundEndAt ? Math.max(0, room.roundEndAt - Date.now()) : null,
+        roundMsLeft: room.roundEndAt && room.phase === 'playing' ? Math.max(0, room.roundEndAt - Date.now()) : null,
     });
 }
 
 function stepRoomTick(room) {
-    stepLava(room);
+    if (room.kind === 'main') stepLava(room);
 
     for (const { player } of room.players.values()) {
         player.pushDelta.x = 0;
@@ -354,8 +421,10 @@ function stepRoomTick(room) {
         applyPendingMove(player, room.objects);
     }
 
-    stepMeteors(room);
-    stepRound(room);
+    if (room.kind === 'main') {
+        stepMeteors(room);
+        stepRound(room);
+    }
 
     room.tickCount++;
     if (room.tickCount % BROADCAST_EVERY_N_TICKS === 0) broadcastState(room);
@@ -420,12 +489,30 @@ httpServer.listen(PORT, () => {
 // Sockets that haven't picked a room yet live here, keyed by the ws itself.
 const connections = new Map();
 
+function addPlayerToRoom(ws, conn, room) {
+    const id = room.freeIds.length ? room.freeIds.shift() : room.nextId++;
+    const player = createPlayer();
+    player.keys = { w: false, a: false, s: false, d: false, jump: false, down: false };
+    if (room.kind === 'main' && room.phase === 'playing') player.ghost = true; // late joiner spectates till next round
+    room.players.set(id, { ws, player });
+    conn.room = room;
+    conn.playerId = id;
+
+    ws.send(JSON.stringify({
+        type: 'welcome', id, level: buildTowerLevel(room.towerId),
+        roomId: room.id, roomKind: room.kind, roomName: room.name, phase: room.phase,
+        isHost: room.hostWs === ws, towerPool: TOWER_POOL.map((t) => ({ id: t.id, name: t.name })),
+    }));
+    broadcastRaw(room, { type: 'join', id });
+    broadcastRoomsSnapshot();
+}
+
 wss.on('connection', (ws, req) => {
     const ip = req.socket.remoteAddress;
-    const conn = { ws, ip, room: null, playerId: null, lastChatAt: 0 };
+    const conn = { ws, ip, room: null, playerId: null, lastChatAt: 0, pendingRoom: null, pendingRequestId: null };
     connections.set(ws, conn);
 
-    ws.send(JSON.stringify({ type: 'rooms', rooms: roomsSnapshot() }));
+    ws.send(JSON.stringify({ type: 'rooms', rooms: roomsSnapshot(), towerPool: TOWER_POOL.map((t) => ({ id: t.id, name: t.name })) }));
 
     ws.on('message', (raw) => {
         let msg;
@@ -435,37 +522,88 @@ wss.on('connection', (ws, req) => {
 
         if (msg.type === 'create_room') {
             if (conn.room) return;
-            const room = createCustomRoom(msg.name);
+            const room = createCustomRoom(msg.name, ws);
             broadcastRoomsSnapshot();
             ws.send(JSON.stringify({ type: 'room_created', roomId: room.id }));
             return;
         }
 
-        if (msg.type === 'join_room') {
+        if (msg.type === 'start_practice') {
             if (conn.room) return;
+            const towerId = Number(msg.towerId);
+            const room = createPracticeRoom(TOWER_POOL.some((t) => t.id === towerId) ? towerId : randomTowerId());
+            addPlayerToRoom(ws, conn, room);
+            return;
+        }
+
+        if (msg.type === 'join_room') {
+            if (conn.room || conn.pendingRoom) return;
             const room = rooms.get(msg.room);
-            if (!room) return;
-            if (room.players.size >= MAX_ROOM_PLAYERS) {
+            if (!room || room.kind === 'practice') return;
+            if (room.players.size >= room.maxPlayers) {
                 ws.send(JSON.stringify({ type: 'join_error', reason: 'full', roomId: room.id }));
                 return;
             }
 
-            const id = room.freeIds.length ? room.freeIds.shift() : room.nextId++;
-            const player = createPlayer();
-            player.keys = { w: false, a: false, s: false, d: false, jump: false, down: false };
-            if (room.kind === 'main' && room.phase === 'playing') player.ghost = true; // late joiner spectates till next round
-            room.players.set(id, { ws, player });
-            conn.room = room;
-            conn.playerId = id;
+            const needsApproval = !room.permanent && room.hostWs && room.hostWs !== ws;
+            if (needsApproval) {
+                const requestId = nextJoinRequestId++;
+                room.pendingJoins.set(requestId, { ws });
+                conn.pendingRoom = room;
+                conn.pendingRequestId = requestId;
+                if (room.hostWs.readyState === room.hostWs.OPEN) {
+                    room.hostWs.send(JSON.stringify({ type: 'join_request', requestId, roomId: room.id }));
+                }
+                ws.send(JSON.stringify({ type: 'join_pending', roomId: room.id }));
+                return;
+            }
 
-            ws.send(JSON.stringify({ type: 'welcome', id, level, roomId: room.id, roomKind: room.kind, phase: room.phase }));
-            broadcastRaw(room, { type: 'join', id });
-            broadcastRoomsSnapshot();
+            addPlayerToRoom(ws, conn, room);
+            return;
+        }
+
+        if (msg.type === 'approve_join' || msg.type === 'deny_join') {
+            const room = conn.room;
+            if (!room || room.hostWs !== ws) return;
+            const requestId = Number(msg.requestId);
+            const pending = room.pendingJoins.get(requestId);
+            if (!pending) return;
+            room.pendingJoins.delete(requestId);
+
+            const reqConn = connections.get(pending.ws);
+            if (reqConn) { reqConn.pendingRoom = null; reqConn.pendingRequestId = null; }
+
+            if (msg.type === 'approve_join' && pending.ws.readyState === pending.ws.OPEN) {
+                if (room.players.size >= room.maxPlayers) {
+                    pending.ws.send(JSON.stringify({ type: 'join_error', reason: 'full', roomId: room.id }));
+                } else if (reqConn) {
+                    addPlayerToRoom(pending.ws, reqConn, room);
+                }
+            } else if (pending.ws.readyState === pending.ws.OPEN) {
+                pending.ws.send(JSON.stringify({ type: 'join_error', reason: 'denied', roomId: room.id }));
+            }
             return;
         }
 
         if (msg.type === 'start_round') {
             if (conn.room) startRound(conn.room);
+            return;
+        }
+
+        if (msg.type === 'choose_next_tower') {
+            const room = conn.room;
+            if (!room || !room.pendingChoice || room.pendingChoice.chooserId !== conn.playerId) return;
+            resolveTowerChoice(room, Number(msg.towerId));
+            return;
+        }
+
+        if (msg.type === 'set_room_tower') {
+            const room = conn.room;
+            if (!room || room.permanent || room.hostWs !== ws || room.phase !== 'waiting') return;
+            const towerId = Number(msg.towerId);
+            if (!TOWER_POOL.some((t) => t.id === towerId)) return;
+            applyTowerChange(room, towerId);
+            for (const { player } of room.players.values()) respawnPlayer(player);
             return;
         }
 
@@ -555,11 +693,29 @@ wss.on('connection', (ws, req) => {
     ws.on('close', () => {
         const conn = connections.get(ws);
         connections.delete(ws);
-        if (!conn || !conn.room) return;
+        if (!conn) return;
+
+        if (conn.pendingRoom) {
+            conn.pendingRoom.pendingJoins.delete(conn.pendingRequestId);
+        }
+
+        if (!conn.room) return;
         const { room, playerId } = conn;
         room.players.delete(playerId);
         room.freeIds.push(playerId);
         broadcastRaw(room, { type: 'leave', id: playerId });
+        if (room.hostWs === ws) {
+            // Host disconnected — deny anyone still waiting on approval rather
+            // than leaving them stuck forever.
+            for (const pending of room.pendingJoins.values()) {
+                if (pending.ws.readyState === pending.ws.OPEN) {
+                    pending.ws.send(JSON.stringify({ type: 'join_error', reason: 'host_left', roomId: room.id }));
+                }
+                const pendingConn = connections.get(pending.ws);
+                if (pendingConn) { pendingConn.pendingRoom = null; pendingConn.pendingRequestId = null; }
+            }
+            room.pendingJoins.clear();
+        }
         removeRoomIfEmpty(room);
         broadcastRoomsSnapshot();
     });
