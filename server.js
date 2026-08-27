@@ -133,9 +133,13 @@ function createPracticeRoom(towerId) {
     return room;
 }
 
-function removeRoomIfEmpty(room) {
-    if (room.permanent || room.players.size > 0) return;
-    rooms.delete(room.id);
+// 'main'-kind rooms (Main Game and every custom room) never get deleted when
+// empty — they just reset, so a room you made sticks around for next time.
+// Practice rooms are private and single-player, so an empty one just vanishes.
+function handleRoomEmpty(room) {
+    if (room.players.size > 0) return;
+    if (room.kind === 'main') resetToLobby(room);
+    else rooms.delete(room.id);
 }
 
 function roomSummary(room) {
@@ -552,6 +556,9 @@ wss.on('connection', (ws, req) => {
                 return;
             }
 
+            // An unhosted custom room (host left) is claimed by whoever joins next.
+            if (!room.permanent && !room.hostWs) room.hostWs = ws;
+
             const needsApproval = !room.permanent && room.hostWs && room.hostWs !== ws;
             if (needsApproval) {
                 const requestId = nextJoinRequestId++;
@@ -713,7 +720,10 @@ wss.on('connection', (ws, req) => {
         broadcastRaw(room, { type: 'leave', id: playerId });
         if (room.hostWs === ws) {
             // Host disconnected — deny anyone still waiting on approval rather
-            // than leaving them stuck forever.
+            // than leaving them stuck forever, and clear the host slot so the
+            // room doesn't become permanently unjoinable (custom rooms persist
+            // when empty now, instead of being deleted). The next player to
+            // join an unhosted room automatically becomes its new host.
             for (const pending of room.pendingJoins.values()) {
                 if (pending.ws.readyState === pending.ws.OPEN) {
                     pending.ws.send(JSON.stringify({ type: 'join_error', reason: 'host_left', roomId: room.id }));
@@ -722,11 +732,9 @@ wss.on('connection', (ws, req) => {
                 if (pendingConn) { pendingConn.pendingRoom = null; pendingConn.pendingRequestId = null; }
             }
             room.pendingJoins.clear();
+            room.hostWs = null;
         }
-        // Permanent rooms (Main Game) never get deleted when empty, so reset
-        // their round instead of leaving lava/meteors/a timer running for no one.
-        if (room.players.size === 0 && room.permanent) resetToLobby(room);
-        removeRoomIfEmpty(room);
+        handleRoomEmpty(room);
         broadcastRoomsSnapshot();
     });
 });
