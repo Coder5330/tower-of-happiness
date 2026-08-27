@@ -62,12 +62,18 @@ function isImmune(player) {
 // spectate as a ghost until the next round starts. 'practice' is a permanent,
 // hazard-free sandbox: no lava, no meteors, no round clock.
 
-const rooms = new Map();
+const MAX_ROOM_PLAYERS = 8;
+const CUSTOM_ROOM_NAME_MAX_LEN = 30;
 
-function createRoom(id, kind) {
+const rooms = new Map();
+let nextCustomRoomId = 1;
+
+function createRoom(id, kind, name, permanent) {
     return {
         id,
         kind,
+        name,
+        permanent,
         objects: buildObjects(),
         players: new Map(),
         nextId: 1,
@@ -83,11 +89,26 @@ function createRoom(id, kind) {
     };
 }
 
-rooms.set('main', createRoom('main', 'main'));
-rooms.set('practice', createRoom('practice', 'practice'));
+rooms.set('main', createRoom('main', 'main', 'Main Game', true));
+rooms.set('practice', createRoom('practice', 'practice', 'Practice', true));
+
+// Player-created rooms are competitive ('main' rules) and disappear once the
+// last player leaves, so the room list doesn't grow forever.
+function createCustomRoom(rawName) {
+    const id = `room-${nextCustomRoomId++}`;
+    const name = (typeof rawName === 'string' ? rawName.trim() : '').slice(0, CUSTOM_ROOM_NAME_MAX_LEN) || `Room ${id.split('-')[1]}`;
+    const room = createRoom(id, 'main', name, false);
+    rooms.set(id, room);
+    return room;
+}
+
+function removeRoomIfEmpty(room) {
+    if (room.permanent || room.players.size > 0) return;
+    rooms.delete(room.id);
+}
 
 function roomSummary(room) {
-    return { id: room.id, kind: room.kind, phase: room.phase, players: room.players.size };
+    return { id: room.id, kind: room.kind, name: room.name, phase: room.phase, players: room.players.size, maxPlayers: MAX_ROOM_PLAYERS };
 }
 
 function roomsSnapshot() {
@@ -412,10 +433,22 @@ wss.on('connection', (ws, req) => {
         const conn = connections.get(ws);
         if (!conn) return;
 
+        if (msg.type === 'create_room') {
+            if (conn.room) return;
+            const room = createCustomRoom(msg.name);
+            broadcastRoomsSnapshot();
+            ws.send(JSON.stringify({ type: 'room_created', roomId: room.id }));
+            return;
+        }
+
         if (msg.type === 'join_room') {
             if (conn.room) return;
             const room = rooms.get(msg.room);
             if (!room) return;
+            if (room.players.size >= MAX_ROOM_PLAYERS) {
+                ws.send(JSON.stringify({ type: 'join_error', reason: 'full', roomId: room.id }));
+                return;
+            }
 
             const id = room.freeIds.length ? room.freeIds.shift() : room.nextId++;
             const player = createPlayer();
@@ -527,6 +560,7 @@ wss.on('connection', (ws, req) => {
         room.players.delete(playerId);
         room.freeIds.push(playerId);
         broadcastRaw(room, { type: 'leave', id: playerId });
+        removeRoomIfEmpty(room);
         broadcastRoomsSnapshot();
     });
 });

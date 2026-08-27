@@ -222,6 +222,40 @@ canvas {
   width: min(360px, 85vw);
 }
 
+#createRoomRow {
+  display: flex;
+  gap: 8px;
+  width: min(360px, 85vw);
+}
+
+#createRoomInput {
+  flex: 1;
+  font-family: sans-serif;
+  font-size: 13px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+}
+
+#createRoomBtn {
+  font-family: sans-serif;
+  font-weight: bold;
+  font-size: 13px;
+  padding: 8px 14px;
+  border-radius: 6px;
+  border: none;
+  background: #3498db;
+  color: #fff;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+#createRoomBtn:hover {
+  background: #4aa8e8;
+}
+
 .roomOption {
   display: flex;
   align-items: center;
@@ -246,6 +280,15 @@ canvas {
 .roomOption .roomOptionMeta {
   font-size: 12px;
   color: #aaa;
+}
+
+.roomOptionFull {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.roomOptionFull:hover {
+  background: rgba(255, 255, 255, 0.08);
 }
 
 #lobbyPanel {
