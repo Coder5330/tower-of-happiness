@@ -129,48 +129,16 @@ function stepMeteors() {
 
 // --- Gimmicks, ported from the 2D prototype (jump-to-happiness) ---
 
-const RED_LIGHT_TICKS = 300;
-const GREEN_LIGHT_TICKS = 540;
 const LAVA_RISE_PER_TICK = 0.004;
 const LAVA_START_Y = -10;
 const LAVA_RESET_ABOVE = TOWER_HEIGHT + 10;
 
 const gimmick = {
-    redLight: false,
-    redLightTimer: 0,
-    greenLightTimer: GREEN_LIGHT_TICKS,
     lavaY: LAVA_START_Y,
 };
 
 function isImmune(player) {
     return player.admin && player.admin.fly;
-}
-
-function stepRedLight() {
-    if (gimmick.redLight) {
-        gimmick.redLightTimer--;
-        if (gimmick.redLightTimer <= 0) {
-            gimmick.redLight = false;
-            gimmick.greenLightTimer = GREEN_LIGHT_TICKS;
-        }
-    } else {
-        gimmick.greenLightTimer--;
-        if (gimmick.greenLightTimer <= 0) {
-            gimmick.redLight = true;
-            gimmick.redLightTimer = RED_LIGHT_TICKS;
-        }
-    }
-}
-
-// Getting caught moving during red light sends you back to spawn — classic
-// red-light-green-light, checked against the keys the player is holding this tick.
-function enforceRedLight() {
-    if (!gimmick.redLight) return;
-    for (const { player } of players.values()) {
-        if (isImmune(player)) continue;
-        const k = player.keys;
-        if (k.w || k.a || k.s || k.d || k.jump || k.down) respawnPlayer(player);
-    }
 }
 
 function stepLava() {
@@ -189,8 +157,6 @@ function stepLava() {
 }
 
 function stepGimmicks() {
-    stepRedLight();
-    enforceRedLight();
     stepLava();
 }
 
@@ -378,7 +344,6 @@ function broadcastState() {
     }));
     const explosionState = pendingExplosions.splice(0, pendingExplosions.length);
     const gimmickState = {
-        redLight: gimmick.redLight,
         lavaY: gimmick.lavaY,
     };
     broadcastRaw({

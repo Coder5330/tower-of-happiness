@@ -292,14 +292,7 @@ function updateExplosions() {
     }
 }
 
-const lightIndicatorEl = document.getElementById('lightIndicator');
-
 function syncGimmick(g) {
-    lightIndicatorEl.classList.remove('hidden');
-    lightIndicatorEl.classList.toggle('red', g.redLight);
-    lightIndicatorEl.classList.toggle('green', !g.redLight);
-    lightIndicatorEl.textContent = g.redLight ? 'RED LIGHT' : 'GREEN LIGHT';
-
     updateLava(g.lavaY);
 }
 
