@@ -268,6 +268,8 @@ function resetToLobby(room) {
     room.phase = room.kind === 'main' ? 'waiting' : 'practice';
     room.gimmick.lavaY = LAVA_START_Y;
     room.meteors.length = 0;
+    room.roundEndAt = null;
+    room.pendingChoice = null;
     for (const { player } of room.players.values()) {
         player.ghost = false;
         respawnPlayer(player);
@@ -362,7 +364,7 @@ function broadcastState(room) {
 }
 
 function stepRoomTick(room) {
-    if (room.kind === 'main') stepLava(room);
+    if (room.kind === 'main' && room.phase === 'playing') stepLava(room);
 
     for (const { player } of room.players.values()) {
         player.pushDelta.x = 0;
@@ -427,7 +429,7 @@ function stepRoomTick(room) {
     }
 
     if (room.kind === 'main') {
-        stepMeteors(room);
+        if (room.phase === 'playing') stepMeteors(room);
         stepRound(room);
     }
 
@@ -721,6 +723,9 @@ wss.on('connection', (ws, req) => {
             }
             room.pendingJoins.clear();
         }
+        // Permanent rooms (Main Game) never get deleted when empty, so reset
+        // their round instead of leaving lava/meteors/a timer running for no one.
+        if (room.players.size === 0 && room.permanent) resetToLobby(room);
         removeRoomIfEmpty(room);
         broadcastRoomsSnapshot();
     });
