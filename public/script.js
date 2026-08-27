@@ -224,7 +224,7 @@ let towerPool = [];
 function renderRoomList(rooms) {
     roomListEl.innerHTML = '';
     for (const room of rooms) {
-        const full = room.players >= room.maxPlayers;
+        const full = room.maxPlayers != null && room.players >= room.maxPlayers;
         const el = document.createElement('div');
         el.className = 'roomOption';
         if (full) el.classList.add('roomOptionFull');
@@ -238,7 +238,8 @@ function renderRoomList(rooms) {
         const status = room.kind === 'practice'
             ? 'no hazards, just climb'
             : (room.phase === 'waiting' ? 'waiting to start' : 'round in progress');
-        metaEl.textContent = `${room.players}/${room.maxPlayers} — ${full ? 'full' : status}`;
+        const countText = room.maxPlayers != null ? `${room.players}/${room.maxPlayers}` : `${room.players}`;
+        metaEl.textContent = `${countText} — ${full ? 'full' : status}`;
 
         el.appendChild(nameEl);
         el.appendChild(metaEl);

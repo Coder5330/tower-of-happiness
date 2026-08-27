@@ -103,7 +103,7 @@ function createRoom({ id, kind, name, permanent, maxPlayers, towerId, hostWs }) 
 
 rooms.set('main', createRoom({
     id: 'main', kind: 'main', name: 'Main Game', permanent: true,
-    maxPlayers: MAX_ROOM_PLAYERS, towerId: randomTowerId(),
+    maxPlayers: Infinity, towerId: randomTowerId(),
 }));
 
 // Player-created rooms are competitive ('main' rules) and disappear once the
@@ -139,7 +139,12 @@ function removeRoomIfEmpty(room) {
 }
 
 function roomSummary(room) {
-    return { id: room.id, kind: room.kind, name: room.name, phase: room.phase, players: room.players.size, maxPlayers: room.maxPlayers };
+    // Infinity isn't valid JSON (it serializes to null) — send null explicitly
+    // so the client can render "no cap" instead of misreading it as 0.
+    return {
+        id: room.id, kind: room.kind, name: room.name, phase: room.phase, players: room.players.size,
+        maxPlayers: room.maxPlayers === Infinity ? null : room.maxPlayers,
+    };
 }
 
 function roomsSnapshot() {
