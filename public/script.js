@@ -49,13 +49,21 @@ const collidableMeshes = [ground];
 
 const lava = new THREE.Mesh(
     new THREE.BoxGeometry(GROUND_AREA, 200, GROUND_AREA),
-    new THREE.MeshStandardMaterial({ color: 0xff3300, emissive: 0xcc2200, emissiveIntensity: 0.9, transparent: true, opacity: 0.85 })
+    // DoubleSide so the inside faces render too — otherwise being inside the lava
+    // (as a ghost, or briefly on death) shows nothing at all, just empty space.
+    new THREE.MeshStandardMaterial({
+        color: 0xff3300, emissive: 0xcc2200, emissiveIntensity: 0.9,
+        transparent: true, opacity: 0.85, side: THREE.DoubleSide,
+    })
 );
 lava.position.set(0, -110, 0);
 scene.add(lava);
 
+let currentLavaY = -10;
+
 function updateLava(lavaY) {
     // The lava box's top face tracks lavaY; its bulk extends far below so it always fills upward.
+    currentLavaY = lavaY;
     lava.position.y = lavaY - 100;
 }
 
@@ -171,6 +179,7 @@ let angleX = 0;
 
 const remotePlayers = new Map();
 const ghostHintEl = document.getElementById('ghostHint');
+const lavaOverlayEl = document.getElementById('lavaOverlay');
 const roundTimerEl = document.getElementById('roundTimer');
 const roundBannerEl = document.getElementById('roundBanner');
 
@@ -654,6 +663,8 @@ function animate() {
             ));
         }
     }
+
+    lavaOverlayEl.classList.toggle('hidden', camera.position.y >= currentLavaY);
 
     renderer.render(scene, camera);
     drawHeightHUD(me ? me.mesh.position.y : 0);
