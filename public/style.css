@@ -157,22 +157,3 @@ canvas {
   background: rgba(180, 0, 0, 0.75);
 }
 
-#paywallOverlay {
-  position: fixed;
-  inset: 0;
-  z-index: 20;
-  background: rgba(0, 0, 0, 0.85);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  pointer-events: none;
-}
-
-#paywallText {
-  font-family: sans-serif;
-  font-weight: 900;
-  font-size: 64px;
-  color: #ffd700;
-  text-shadow: 0 0 20px rgba(255, 215, 0, 0.8);
-  letter-spacing: 4px;
-}

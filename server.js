@@ -28,16 +28,16 @@ const AUTH_LOCKOUT_MS = 30000;
 const CHAT_MAX_LEN = 200;
 const CHAT_MIN_INTERVAL_MS = 300;
 
-const METEOR_RADIUS_MIN = 0.8;
-const METEOR_RADIUS_MAX = 2;
-const METEOR_SPEED_MIN = 0.2;
-const METEOR_SPEED_MAX = 0.45;
-const METEOR_SPAWN_MIN_MS = 200;
-const METEOR_SPAWN_MAX_MS = 800;
+const METEOR_RADIUS_MIN = 0.4;
+const METEOR_RADIUS_MAX = 1.0;
+const METEOR_SPEED_MIN = 0.12;
+const METEOR_SPEED_MAX = 0.25;
+const METEOR_SPAWN_MIN_MS = 1500;
+const METEOR_SPAWN_MAX_MS = 3500;
 const HOMING_CHANCE = 0.1;
 const HOMING_SPEED_MULT = 10;
-const NORMAL_WARN_SECONDS = 1.0;
-const HOMING_WARN_SECONDS = 2.0;
+const NORMAL_WARN_SECONDS = 1.6;
+const HOMING_WARN_SECONDS = 3.0;
 const METEOR_SPAWN_Y = TOWER_HEIGHT + 15;
 const METEOR_DESPAWN_Y = -5;
 const METEOR_XZ_RANGE = GROUND_AREA / 2 - 1.5;
@@ -134,15 +134,12 @@ const GREEN_LIGHT_TICKS = 540;
 const LAVA_RISE_PER_TICK = 0.004;
 const LAVA_START_Y = -10;
 const LAVA_RESET_ABOVE = TOWER_HEIGHT + 10;
-const PAYWALL_INTERVAL_TICKS = 2400;
-const PAYWALL_PAY_CHANCE = 0.5;
 
 const gimmick = {
     redLight: false,
     redLightTimer: 0,
     greenLightTimer: GREEN_LIGHT_TICKS,
     lavaY: LAVA_START_Y,
-    paywallTimer: PAYWALL_INTERVAL_TICKS,
 };
 
 function isImmune(player) {
@@ -191,25 +188,10 @@ function stepLava() {
     }
 }
 
-// Everyone gets the "PAY UP" prompt; each player independently rolls whether they
-// "paid" — the unlucky ones get yanked back to spawn.
-function stepPaywall() {
-    gimmick.paywallTimer--;
-    if (gimmick.paywallTimer > 0) return;
-    gimmick.paywallTimer = PAYWALL_INTERVAL_TICKS;
-
-    broadcastRaw({ type: 'paywall' });
-    for (const { player } of players.values()) {
-        if (isImmune(player)) continue;
-        if (Math.random() >= PAYWALL_PAY_CHANCE) respawnPlayer(player);
-    }
-}
-
 function stepGimmicks() {
     stepRedLight();
     enforceRedLight();
     stepLava();
-    stepPaywall();
 }
 
 // Keyed by IP rather than per-connection, so opening another tab/socket doesn't
