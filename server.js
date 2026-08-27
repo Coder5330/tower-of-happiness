@@ -14,11 +14,6 @@ const TICK_HZ = 60;
 const TICK_MS = 1000 / TICK_HZ;
 const BROADCAST_EVERY_N_TICKS = 2;
 
-const objects = buildObjects();
-const players = new Map();
-let nextId = 1;
-const freeIds = [];
-
 const ADMIN_CODE = process.env.ADMIN_CODE || crypto.randomBytes(6).toString('hex');
 if (!process.env.ADMIN_CODE) {
     console.log(`No ADMIN_CODE set — generated admin code for this run: ${ADMIN_CODE}`);
@@ -41,10 +36,12 @@ const METEOR_DESPAWN_Y = -5;
 const METEOR_XZ_RANGE = GROUND_AREA / 2 - 1.5;
 const GROUND_Y = 0;
 
-const meteors = [];
-const pendingExplosions = [];
-let nextMeteorId = 1;
-let ticksUntilMeteor = 1;
+const LAVA_RISE_PER_TICK = 0.004;
+const LAVA_START_Y = -10;
+const LAVA_RESET_ABOVE = TOWER_HEIGHT + 10;
+
+const ROUND_DURATION_MS = 5 * 60 * 1000;
+const WIN_HEIGHT = TOWER_HEIGHT - 3; // reaching the top platform counts as the win
 
 function randomBetween(min, max) {
     return min + Math.random() * (max - min);
@@ -54,7 +51,64 @@ function nextSpawnTicks() {
     return Math.max(1, Math.round(randomBetween(METEOR_SPAWN_MIN_MS, METEOR_SPAWN_MAX_MS) / TICK_MS));
 }
 
-function spawnMeteor() {
+function isImmune(player) {
+    return (player.admin && player.admin.fly) || player.ghost;
+}
+
+// --- Rooms ---
+// 'main' rooms run the full competitive loop (lava, meteors, a 5-minute round
+// clock, a win condition) and sit in a 'waiting' lobby between rounds so anyone
+// who joins mid-round never gets dropped into an already-lost game — they just
+// spectate as a ghost until the next round starts. 'practice' is a permanent,
+// hazard-free sandbox: no lava, no meteors, no round clock.
+
+const rooms = new Map();
+
+function createRoom(id, kind) {
+    return {
+        id,
+        kind,
+        objects: buildObjects(),
+        players: new Map(),
+        nextId: 1,
+        freeIds: [],
+        meteors: [],
+        pendingExplosions: [],
+        nextMeteorId: 1,
+        ticksUntilMeteor: nextSpawnTicks(),
+        gimmick: { lavaY: LAVA_START_Y },
+        phase: kind === 'main' ? 'waiting' : 'practice',
+        roundEndAt: null,
+        tickCount: 0,
+    };
+}
+
+rooms.set('main', createRoom('main', 'main'));
+rooms.set('practice', createRoom('practice', 'practice'));
+
+function roomSummary(room) {
+    return { id: room.id, kind: room.kind, phase: room.phase, players: room.players.size };
+}
+
+function roomsSnapshot() {
+    return Array.from(rooms.values(), roomSummary);
+}
+
+function broadcastRoomsSnapshot() {
+    const data = JSON.stringify({ type: 'rooms', rooms: roomsSnapshot() });
+    for (const conn of connections.values()) {
+        if (!conn.room && conn.ws.readyState === conn.ws.OPEN) conn.ws.send(data);
+    }
+}
+
+function broadcastRaw(room, msg) {
+    const data = JSON.stringify(msg);
+    for (const { ws } of room.players.values()) {
+        if (ws.readyState === ws.OPEN) ws.send(data);
+    }
+}
+
+function spawnMeteor(room) {
     const radius = randomBetween(METEOR_RADIUS_MIN, METEOR_RADIUS_MAX);
     const speed = randomBetween(METEOR_SPEED_MIN, METEOR_SPEED_MAX);
     const x = randomBetween(-METEOR_XZ_RANGE, METEOR_XZ_RANGE);
@@ -64,7 +118,7 @@ function spawnMeteor() {
 
     const shadowY = GROUND_Y + speed * WARN_SECONDS * TICK_HZ;
 
-    meteors.push({ id: nextMeteorId++, x, y, z, vx: 0, vy, vz: 0, radius, landingX: x, landingZ: z, shadowY });
+    room.meteors.push({ id: room.nextMeteorId++, x, y, z, vx: 0, vy, vz: 0, radius, landingX: x, landingZ: z, shadowY });
 }
 
 function meteorHitsPlayer(meteor, player) {
@@ -79,30 +133,30 @@ function meteorHitsPlayer(meteor, player) {
 // Ground is objects[0] and every tower platform is in there too, so this single
 // scan covers "meteor lands on the ground" and "meteor gets intercepted by a
 // platform" the same way — approximating the meteor as a bounding cube.
-function meteorHitsSolid(meteor) {
+function meteorHitsSolid(room, meteor) {
     const size = { width: meteor.radius * 2, height: meteor.radius * 2, depth: meteor.radius * 2 };
     const pos = { x: meteor.x, y: meteor.y, z: meteor.z };
-    for (const object of objects) {
+    for (const object of room.objects) {
         if (hitTestFor(object, size)(pos)) return true;
     }
     return false;
 }
 
-function stepMeteors() {
-    ticksUntilMeteor--;
-    if (ticksUntilMeteor <= 0) {
-        spawnMeteor();
-        ticksUntilMeteor = nextSpawnTicks();
+function stepMeteors(room) {
+    room.ticksUntilMeteor--;
+    if (room.ticksUntilMeteor <= 0) {
+        spawnMeteor(room);
+        room.ticksUntilMeteor = nextSpawnTicks();
     }
 
-    for (let i = meteors.length - 1; i >= 0; i--) {
-        const meteor = meteors[i];
+    for (let i = room.meteors.length - 1; i >= 0; i--) {
+        const meteor = room.meteors[i];
         meteor.x += meteor.vx;
         meteor.y += meteor.vy;
         meteor.z += meteor.vz;
 
         let hit = false;
-        for (const { player } of players.values()) {
+        for (const { player } of room.players.values()) {
             if (isImmune(player)) continue;
             if (meteorHitsPlayer(meteor, player)) {
                 respawnPlayer(player);
@@ -110,88 +164,180 @@ function stepMeteors() {
             }
         }
 
-        const intercepted = meteorHitsSolid(meteor);
+        const intercepted = meteorHitsSolid(room, meteor);
         if (hit || intercepted) {
-            pendingExplosions.push({ x: meteor.x, y: Math.max(meteor.y, GROUND_Y), z: meteor.z, radius: meteor.radius });
+            room.pendingExplosions.push({ x: meteor.x, y: Math.max(meteor.y, GROUND_Y), z: meteor.z, radius: meteor.radius });
         }
-        if (hit || intercepted || meteor.y < METEOR_DESPAWN_Y) meteors.splice(i, 1);
+        if (hit || intercepted || meteor.y < METEOR_DESPAWN_Y) room.meteors.splice(i, 1);
     }
-}
-
-// --- Gimmicks, ported from the 2D prototype (jump-to-happiness) ---
-
-const LAVA_RISE_PER_TICK = 0.004;
-const LAVA_START_Y = -10;
-const LAVA_RESET_ABOVE = TOWER_HEIGHT + 10;
-
-const gimmick = {
-    lavaY: LAVA_START_Y,
-};
-
-function isImmune(player) {
-    return (player.admin && player.admin.fly) || player.ghost;
 }
 
 // The lava never resets on a death — instead, whoever it catches becomes a ghost:
 // immune, free-flying (reuses the fly physics), able to watch the others climb.
 // Everyone gets revived only once the lava completes a full cycle and loops back down.
-function stepLava() {
-    gimmick.lavaY += LAVA_RISE_PER_TICK;
-    if (gimmick.lavaY > LAVA_RESET_ABOVE) {
-        gimmick.lavaY = LAVA_START_Y;
-        for (const { player } of players.values()) {
+function stepLava(room) {
+    room.gimmick.lavaY += LAVA_RISE_PER_TICK;
+    if (room.gimmick.lavaY > LAVA_RESET_ABOVE) {
+        room.gimmick.lavaY = LAVA_START_Y;
+        for (const { player } of room.players.values()) {
             if (!player.ghost) continue;
             player.ghost = false;
             respawnPlayer(player);
         }
     }
 
-    for (const { player } of players.values()) {
+    for (const { player } of room.players.values()) {
         if (isImmune(player)) continue;
-        if (player.position.y - PLAYER_SIZE.height / 2 < gimmick.lavaY) {
+        if (player.position.y - PLAYER_SIZE.height / 2 < room.gimmick.lavaY) {
             player.ghost = true;
         }
     }
 }
 
-function stepGimmicks() {
-    stepLava();
-}
-
-// --- Round: reach the top before the 5-minute clock runs out to win ---
-
-const ROUND_DURATION_MS = 5 * 60 * 1000;
-const WIN_HEIGHT = TOWER_HEIGHT - 3; // reaching the top platform counts as the win
-
-let roundEndAt = Date.now() + ROUND_DURATION_MS;
-
-function resetRound() {
-    roundEndAt = Date.now() + ROUND_DURATION_MS;
-    gimmick.lavaY = LAVA_START_Y;
-    for (const { player } of players.values()) {
+// Between rounds (and permanently, for practice) the room sits in a lobby: no
+// hazards, everyone gets a clean respawn so latecomers and round-losers start level.
+function resetToLobby(room) {
+    room.phase = room.kind === 'main' ? 'waiting' : 'practice';
+    room.gimmick.lavaY = LAVA_START_Y;
+    room.meteors.length = 0;
+    for (const { player } of room.players.values()) {
         player.ghost = false;
         respawnPlayer(player);
     }
+    broadcastRaw(room, { type: 'phase', phase: room.phase });
 }
 
-function stepRound() {
+function startRound(room) {
+    if (room.kind !== 'main' || room.phase !== 'waiting') return;
+    room.phase = 'playing';
+    room.roundEndAt = Date.now() + ROUND_DURATION_MS;
+    room.gimmick.lavaY = LAVA_START_Y;
+    for (const { player } of room.players.values()) {
+        player.ghost = false;
+        respawnPlayer(player);
+    }
+    broadcastRaw(room, { type: 'phase', phase: room.phase });
+}
+
+function stepRound(room) {
+    if (room.kind !== 'main' || room.phase !== 'playing') return;
     const now = Date.now();
 
-    for (const [id, { player }] of players.entries()) {
+    for (const [id, { player }] of room.players.entries()) {
         if (isImmune(player)) continue; // ghosts and flying admins can't win
         if (player.position.y < WIN_HEIGHT) continue;
 
-        const secondsLeft = Math.max(0, (roundEndAt - now) / 1000);
-        broadcastRaw({ type: 'round_result', winner: id, secondsLeft });
+        const secondsLeft = Math.max(0, (room.roundEndAt - now) / 1000);
+        broadcastRaw(room, { type: 'round_result', winner: id, secondsLeft });
         recordWin(secondsLeft);
-        resetRound();
+        resetToLobby(room);
         return;
     }
 
-    if (now >= roundEndAt) {
-        broadcastRaw({ type: 'round_result', winner: null, secondsLeft: 0 });
-        resetRound();
+    if (now >= room.roundEndAt) {
+        broadcastRaw(room, { type: 'round_result', winner: null, secondsLeft: 0 });
+        resetToLobby(room);
     }
+}
+
+function broadcastState(room) {
+    const playerState = {};
+    for (const [id, { player }] of room.players.entries()) {
+        playerState[id] = { x: player.position.x, y: player.position.y, z: player.position.z, angleY: player.angleY, ghost: player.ghost };
+    }
+
+    const platforms = {};
+    room.objects.forEach((object, idx) => {
+        if (object.special === 'moving') {
+            platforms[idx] = { x: object.position.x, y: object.position.y, z: object.position.z };
+        }
+    });
+    const meteorState = room.meteors.map((m) => ({
+        id: m.id, x: m.x, y: m.y, z: m.z, radius: m.radius,
+        landingX: m.landingX, landingZ: m.landingZ, shadowY: m.shadowY,
+    }));
+    const explosionState = room.pendingExplosions.splice(0, room.pendingExplosions.length);
+    const gimmickState = {
+        lavaY: room.gimmick.lavaY,
+    };
+    broadcastRaw(room, {
+        type: 'state', players: playerState, platforms, meteors: meteorState,
+        explosions: explosionState, gimmick: gimmickState,
+        phase: room.phase,
+        roundMsLeft: room.roundEndAt ? Math.max(0, room.roundEndAt - Date.now()) : null,
+    });
+}
+
+function stepRoomTick(room) {
+    stepLava(room);
+
+    for (const { player } of room.players.values()) {
+        player.pushDelta.x = 0;
+        player.pushDelta.z = 0;
+        player.pushBlockedThisTick = false;
+    }
+
+    for (const [id, { player }] of room.players.entries()) {
+        const otherPlayers = [];
+        for (const [otherId, { player: op }] of room.players.entries()) {
+            if (otherId !== id) otherPlayers.push(op);
+        }
+        resolveMovement(player, room.objects, player.keys, otherPlayers);
+    }
+
+    const PUSH_CHAIN_ITERATIONS = 6;
+    for (let iter = 0; iter < PUSH_CHAIN_ITERATIONS; iter++) {
+        const forwarded = new Map(); // player -> { x, z } to apply next iteration
+        for (const [id, { player }] of room.players.entries()) {
+            if (player.pushDelta.x === 0 && player.pushDelta.z === 0) continue;
+            const otherPlayers = [];
+            for (const [otherId, { player: op }] of room.players.entries()) {
+                if (otherId !== id) otherPlayers.push(op);
+            }
+            const attempted = { x: player.pushDelta.x, z: player.pushDelta.z };
+            const result = resolvePush(player, attempted, room.objects, otherPlayers);
+            player.pendingDelta.x += result.x;
+            player.pendingDelta.z += result.z;
+
+            const blockedX = attempted.x - result.x;
+            const blockedZ = attempted.z - result.z;
+            if (blockedX !== 0 || blockedZ !== 0) {
+                player.pushBlockedThisTick = true;
+                player.lastPushDirX = attempted.x;
+                player.lastPushDirZ = attempted.z;
+            }
+            if (result.blockedByX && blockedX !== 0) {
+                const entry = forwarded.get(result.blockedByX) || { x: 0, z: 0 };
+                entry.x += blockedX;
+                forwarded.set(result.blockedByX, entry);
+            }
+            if (result.blockedByZ && blockedZ !== 0) {
+                const entry = forwarded.get(result.blockedByZ) || { x: 0, z: 0 };
+                entry.z += blockedZ;
+                forwarded.set(result.blockedByZ, entry);
+            }
+
+            player.pushDelta.x = 0;
+            player.pushDelta.z = 0;
+        }
+        for (const [targetPlayer, delta] of forwarded.entries()) {
+            targetPlayer.pushDelta.x += delta.x;
+            targetPlayer.pushDelta.z += delta.z;
+        }
+    }
+
+    applyDismounts(Array.from(room.players.values(), (e) => e.player));
+
+    advanceMovingPlatforms(room.objects);
+    for (const { player } of room.players.values()) {
+        applyPendingMove(player, room.objects);
+    }
+
+    stepMeteors(room);
+    stepRound(room);
+
+    room.tickCount++;
+    if (room.tickCount % BROADCAST_EVERY_N_TICKS === 0) broadcastState(room);
 }
 
 // Keyed by IP rather than per-connection, so opening another tab/socket doesn't
@@ -250,20 +396,50 @@ httpServer.listen(PORT, () => {
     console.log(`Serving game + WebSocket on :${PORT}`);
 });
 
-wss.on('connection', (ws, req) => {
-    const id = freeIds.length ? freeIds.shift() : nextId++;
-    const ip = req.socket.remoteAddress;
-    const player = createPlayer();
-    player.keys = { w: false, a: false, s: false, d: false, jump: false, down: false };
-    const entry = { ws, player, lastChatAt: 0 };
-    players.set(id, entry);
+// Sockets that haven't picked a room yet live here, keyed by the ws itself.
+const connections = new Map();
 
-    ws.send(JSON.stringify({ type: 'welcome', id, level }));
+wss.on('connection', (ws, req) => {
+    const ip = req.socket.remoteAddress;
+    const conn = { ws, ip, room: null, playerId: null, lastChatAt: 0 };
+    connections.set(ws, conn);
+
+    ws.send(JSON.stringify({ type: 'rooms', rooms: roomsSnapshot() }));
 
     ws.on('message', (raw) => {
         let msg;
         try { msg = JSON.parse(raw); } catch { return; }
-        const entry = players.get(id);
+        const conn = connections.get(ws);
+        if (!conn) return;
+
+        if (msg.type === 'join_room') {
+            if (conn.room) return;
+            const room = rooms.get(msg.room);
+            if (!room) return;
+
+            const id = room.freeIds.length ? room.freeIds.shift() : room.nextId++;
+            const player = createPlayer();
+            player.keys = { w: false, a: false, s: false, d: false, jump: false, down: false };
+            if (room.kind === 'main' && room.phase === 'playing') player.ghost = true; // late joiner spectates till next round
+            room.players.set(id, { ws, player });
+            conn.room = room;
+            conn.playerId = id;
+
+            ws.send(JSON.stringify({ type: 'welcome', id, level, roomId: room.id, roomKind: room.kind, phase: room.phase }));
+            broadcastRaw(room, { type: 'join', id });
+            broadcastRoomsSnapshot();
+            return;
+        }
+
+        if (msg.type === 'start_round') {
+            if (conn.room) startRound(conn.room);
+            return;
+        }
+
+        if (!conn.room) return;
+        const room = conn.room;
+        const id = conn.playerId;
+        const entry = room.players.get(id);
         if (!entry) return;
 
         if (msg.type === 'input') {
@@ -277,18 +453,18 @@ wss.on('connection', (ws, req) => {
 
         if (msg.type === 'chat') {
             const now = Date.now();
-            if (now - entry.lastChatAt < CHAT_MIN_INTERVAL_MS) return;
+            if (now - conn.lastChatAt < CHAT_MIN_INTERVAL_MS) return;
             if (typeof msg.text !== 'string') return;
             const text = msg.text.trim().slice(0, CHAT_MAX_LEN);
             if (!text) return;
-            entry.lastChatAt = now;
-            broadcastRaw({ type: 'chat', id, text });
+            conn.lastChatAt = now;
+            broadcastRaw(room, { type: 'chat', id, text });
             return;
         }
 
         if (msg.type === 'admin_auth') {
             const now = Date.now();
-            const authState = getAuthState(ip);
+            const authState = getAuthState(conn.ip);
             if (now < authState.lockUntil) {
                 ws.send(JSON.stringify({ type: 'admin_auth_result', ok: false, locked: true }));
                 return;
@@ -344,52 +520,19 @@ wss.on('connection', (ws, req) => {
     });
 
     ws.on('close', () => {
-        players.delete(id);
-        freeIds.push(id);
-        broadcastRaw({ type: 'leave', id });
+        const conn = connections.get(ws);
+        connections.delete(ws);
+        if (!conn || !conn.room) return;
+        const { room, playerId } = conn;
+        room.players.delete(playerId);
+        room.freeIds.push(playerId);
+        broadcastRaw(room, { type: 'leave', id: playerId });
+        broadcastRoomsSnapshot();
     });
-
-    broadcastRaw({ type: 'join', id });
 });
-
-function broadcastRaw(msg) {
-    const data = JSON.stringify(msg);
-    for (const { ws } of players.values()) {
-        if (ws.readyState === ws.OPEN) ws.send(data);
-    }
-}
-
-function broadcastState() {
-    const playerState = {};
-    for (const [id, { player }] of players.entries()) {
-        playerState[id] = { x: player.position.x, y: player.position.y, z: player.position.z, angleY: player.angleY, ghost: player.ghost };
-    }
-    
-    
-    const platforms = {};
-    objects.forEach((object, idx) => {
-        if (object.special === 'moving') {
-            platforms[idx] = { x: object.position.x, y: object.position.y, z: object.position.z };
-        }
-    });
-    const meteorState = meteors.map((m) => ({
-        id: m.id, x: m.x, y: m.y, z: m.z, radius: m.radius,
-        landingX: m.landingX, landingZ: m.landingZ, shadowY: m.shadowY,
-    }));
-    const explosionState = pendingExplosions.splice(0, pendingExplosions.length);
-    const gimmickState = {
-        lavaY: gimmick.lavaY,
-    };
-    broadcastRaw({
-        type: 'state', players: playerState, platforms, meteors: meteorState,
-        explosions: explosionState, gimmick: gimmickState,
-        roundMsLeft: Math.max(0, roundEndAt - Date.now()),
-    });
-}
 
 let lastTime = Date.now();
 let accumulator = 0;
-let tickCount = 0;
 
 setInterval(() => {
     const now = Date.now();
@@ -397,76 +540,7 @@ setInterval(() => {
     lastTime = now;
 
     while (accumulator >= TICK_MS) {
-        stepGimmicks();
-
-        for (const { player } of players.values()) {
-            player.pushDelta.x = 0;
-            player.pushDelta.z = 0;
-            player.pushBlockedThisTick = false;
-        }
-
-        for (const [id, { player }] of players.entries()) {
-            const otherPlayers = [];
-            for (const [otherId, { player: op }] of players.entries()) {
-                if (otherId !== id) otherPlayers.push(op);
-            }
-            resolveMovement(player, objects, player.keys, otherPlayers);
-        }
-
-        const PUSH_CHAIN_ITERATIONS = 6;
-        for (let iter = 0; iter < PUSH_CHAIN_ITERATIONS; iter++) {
-            const forwarded = new Map(); // player -> { x, z } to apply next iteration
-            for (const [id, { player }] of players.entries()) {
-                if (player.pushDelta.x === 0 && player.pushDelta.z === 0) continue;
-                const otherPlayers = [];
-                for (const [otherId, { player: op }] of players.entries()) {
-                    if (otherId !== id) otherPlayers.push(op);
-                }
-                const attempted = { x: player.pushDelta.x, z: player.pushDelta.z };
-                const result = resolvePush(player, attempted, objects, otherPlayers);
-                player.pendingDelta.x += result.x;
-                player.pendingDelta.z += result.z;
-
-                const blockedX = attempted.x - result.x;
-                const blockedZ = attempted.z - result.z;
-                if (blockedX !== 0 || blockedZ !== 0) {
-                    player.pushBlockedThisTick = true;
-                    player.lastPushDirX = attempted.x;
-                    player.lastPushDirZ = attempted.z;
-                }
-                if (result.blockedByX && blockedX !== 0) {
-                    const entry = forwarded.get(result.blockedByX) || { x: 0, z: 0 };
-                    entry.x += blockedX;
-                    forwarded.set(result.blockedByX, entry);
-                }
-                if (result.blockedByZ && blockedZ !== 0) {
-                    const entry = forwarded.get(result.blockedByZ) || { x: 0, z: 0 };
-                    entry.z += blockedZ;
-                    forwarded.set(result.blockedByZ, entry);
-                }
-
-                player.pushDelta.x = 0;
-                player.pushDelta.z = 0;
-            }
-            for (const [targetPlayer, delta] of forwarded.entries()) {
-                targetPlayer.pushDelta.x += delta.x;
-                targetPlayer.pushDelta.z += delta.z;
-            }
-        }
-
-        applyDismounts(Array.from(players.values(), (e) => e.player));
-
-        advanceMovingPlatforms(objects);
-        for (const { player } of players.values()) {
-            applyPendingMove(player, objects);
-        }
-
-        stepMeteors();
-        stepRound();
-
-        tickCount++;
-        if (tickCount % BROADCAST_EVERY_N_TICKS === 0) broadcastState();
-
+        for (const room of rooms.values()) stepRoomTick(room);
         accumulator -= TICK_MS;
     }
 }, TICK_MS);

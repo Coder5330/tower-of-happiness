@@ -9,6 +9,17 @@
         <canvas id="canvas"></canvas>
         <canvas id="hudCanvas" style="position: absolute; left: 0; top: 0; z-index: 2; pointer-events: none;"></canvas>
 
+        <div id="roomMenu">
+            <div class="roomMenuTitle">Tower of Happiness</div>
+            <div id="roomList">Loading rooms…</div>
+        </div>
+
+        <div id="lobbyPanel" class="hidden">
+            <div class="lobbyTitle">Waiting for players</div>
+            <div id="lobbyPlayerList"></div>
+            <button id="startRoundBtn">Start</button>
+        </div>
+
         <div id="chatLog"></div>
 
         <div id="adminConsole" class="hidden">
@@ -17,7 +28,7 @@
 
         <div id="ghostHint" class="hidden">GHOST — fly around and wait for the lava to reset</div>
         <div id="lavaOverlay" class="hidden"></div>
-        <div id="roundTimer">5:00</div>
+        <div id="roundTimer" class="hidden">5:00</div>
         <div id="roundBanner" class="hidden"></div>
 
         <div id="adminPanel" class="hidden">
@@ -33,6 +44,6 @@
         </div>
 
         <script src="https://unpkg.com/three@0.160.0/build/three.min.js"></script>
-        <script src="script.js?v=16"></script>
+        <script src="script.js?v=17"></script>
     </body>
 </html>

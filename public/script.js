@@ -182,6 +182,46 @@ const ghostHintEl = document.getElementById('ghostHint');
 const lavaOverlayEl = document.getElementById('lavaOverlay');
 const roundTimerEl = document.getElementById('roundTimer');
 const roundBannerEl = document.getElementById('roundBanner');
+const roomMenuEl = document.getElementById('roomMenu');
+const roomListEl = document.getElementById('roomList');
+const lobbyPanelEl = document.getElementById('lobbyPanel');
+const lobbyPlayerListEl = document.getElementById('lobbyPlayerList');
+const startRoundBtnEl = document.getElementById('startRoundBtn');
+
+let myRoomKind = null;
+let currentPhase = null;
+
+function renderRoomList(rooms) {
+    roomListEl.innerHTML = '';
+    for (const room of rooms) {
+        const el = document.createElement('div');
+        el.className = 'roomOption';
+        const label = room.kind === 'practice' ? 'Practice' : 'Main Game';
+        const meta = room.kind === 'practice'
+            ? `${room.players} here — no hazards, just climb`
+            : `${room.players} here — ${room.phase === 'waiting' ? 'waiting to start' : 'round in progress'}`;
+        el.innerHTML = `<span class="roomOptionName">${label}</span><span class="roomOptionMeta">${meta}</span>`;
+        el.addEventListener('click', () => {
+            if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'join_room', room: room.id }));
+        });
+        roomListEl.appendChild(el);
+    }
+}
+
+function updateLobbyVisibility(playersObj) {
+    const showLobby = myRoomKind === 'main' && currentPhase === 'waiting';
+    lobbyPanelEl.classList.toggle('hidden', !showLobby);
+    if (showLobby && playersObj) {
+        const ids = Object.keys(playersObj);
+        lobbyPlayerListEl.textContent = ids.length
+            ? ids.map((id) => (Number(id) === myId ? `You (Player ${id})` : `Player ${id}`)).join(', ')
+            : 'Just you so far';
+    }
+}
+
+startRoundBtnEl.addEventListener('click', () => {
+    if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'start_round' }));
+});
 
 function formatRoundTime(msLeft) {
     const totalSeconds = Math.max(0, Math.ceil(msLeft / 1000));
@@ -343,13 +383,24 @@ function connect() {
     ws.addEventListener('message', (event) => {
         const msg = JSON.parse(event.data);
 
-        if (msg.type === 'welcome') {
+        if (msg.type === 'rooms') {
+            renderRoomList(msg.rooms);
+
+        } else if (msg.type === 'welcome') {
             myId = msg.id;
+            myRoomKind = msg.roomKind;
+            currentPhase = msg.phase;
+            roomMenuEl.classList.add('hidden');
             msg.level.forEach((p) => {
                 platformMeshesByLevelIndex.push(addPlatform(p));
             });
             ensurePlayerMesh(myId);
+            updateLobbyVisibility(null);
             logToConsole('Press "/" to chat');
+
+        } else if (msg.type === 'phase') {
+            currentPhase = msg.phase;
+            updateLobbyVisibility(null);
 
         } else if (msg.type === 'join') {
             ensurePlayerMesh(msg.id);
@@ -386,6 +437,10 @@ function connect() {
             syncMeteors(msg.meteors || []);
             processExplosions(msg.explosions || []);
             if (msg.gimmick) syncGimmick(msg.gimmick);
+
+            currentPhase = msg.phase;
+            updateLobbyVisibility(msg.players);
+            roundTimerEl.classList.toggle('hidden', typeof msg.roundMsLeft !== 'number');
             if (typeof msg.roundMsLeft === 'number') roundTimerEl.textContent = formatRoundTime(msg.roundMsLeft);
 
         } else if (msg.type === 'round_result') {
