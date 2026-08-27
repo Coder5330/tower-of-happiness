@@ -293,8 +293,6 @@ function updateExplosions() {
 }
 
 const lightIndicatorEl = document.getElementById('lightIndicator');
-const paywallOverlayEl = document.getElementById('paywallOverlay');
-const paywallTextEl = document.getElementById('paywallText');
 
 function syncGimmick(g) {
     lightIndicatorEl.classList.remove('hidden');
@@ -303,18 +301,6 @@ function syncGimmick(g) {
     lightIndicatorEl.textContent = g.redLight ? 'RED LIGHT' : 'GREEN LIGHT';
 
     updateLava(g.lavaY);
-}
-
-let paywallTimeoutId = null;
-
-function showPaywall() {
-    paywallTextEl.textContent = 'PAY UP';
-    paywallOverlayEl.classList.remove('hidden');
-    if (paywallTimeoutId) clearTimeout(paywallTimeoutId);
-    paywallTimeoutId = setTimeout(() => {
-        paywallOverlayEl.classList.add('hidden');
-        paywallTimeoutId = null;
-    }, 1500);
 }
 
 let ws;
@@ -372,9 +358,6 @@ function connect() {
             syncMeteors(msg.meteors || []);
             processExplosions(msg.explosions || []);
             if (msg.gimmick) syncGimmick(msg.gimmick);
-
-        } else if (msg.type === 'paywall') {
-            showPaywall();
 
         } else if (msg.type === 'admin_auth_result') {
             if (msg.ok) {
