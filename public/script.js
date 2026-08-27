@@ -170,6 +170,7 @@ let angleY = 0;
 let angleX = 0;
 
 const remotePlayers = new Map();
+const ghostHintEl = document.getElementById('ghostHint');
 
 function colorForPlayer(id) {
     return id === myId ? 0xff4500 : 0x3498db;
@@ -199,21 +200,19 @@ function removePlayerMesh(id) {
 const meteorMeshes = new Map();
 const meteorGeometry = new THREE.SphereGeometry(1, 12, 12);
 const meteorMaterial = new THREE.MeshStandardMaterial({ color: 0xff3300, emissive: 0x992200, emissiveIntensity: 0.9 });
-const homingMeteorMaterial = new THREE.MeshStandardMaterial({ color: 0xff0055, emissive: 0xaa0033, emissiveIntensity: 1.1 });
 
 const shadowGeometry = new THREE.CircleGeometry(1, 24);
 const shadowMaterial = new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0, depthWrite: false });
-const homingShadowMaterial = new THREE.MeshBasicMaterial({ color: 0xff2200, transparent: true, opacity: 0, depthWrite: false });
 
 function ensureMeteorMesh(id, m) {
     if (meteorMeshes.has(id)) return meteorMeshes.get(id);
 
-    const mesh = new THREE.Mesh(meteorGeometry, m.homing ? homingMeteorMaterial : meteorMaterial);
+    const mesh = new THREE.Mesh(meteorGeometry, meteorMaterial);
     mesh.scale.setScalar(m.radius);
     mesh.position.set(m.x, m.y, m.z);
     scene.add(mesh);
 
-    const shadow = new THREE.Mesh(shadowGeometry, (m.homing ? homingShadowMaterial : shadowMaterial).clone());
+    const shadow = new THREE.Mesh(shadowGeometry, shadowMaterial.clone());
     shadow.scale.setScalar(m.radius * 1.4);
     shadow.rotation.x = -Math.PI / 2;
     shadow.position.set(m.landingX, 0.03, m.landingZ);
@@ -338,6 +337,12 @@ function connect() {
                 entry.target.y = pos.y;
                 entry.target.z = pos.z;
                 if (id !== myId) entry.mesh.rotation.y = pos.angleY;
+
+                if (entry.mesh.material.transparent !== !!pos.ghost) {
+                    entry.mesh.material.transparent = !!pos.ghost;
+                    entry.mesh.material.opacity = pos.ghost ? 0.25 : 1;
+                }
+                if (id === myId) ghostHintEl.classList.toggle('hidden', !pos.ghost);
             }
             
             

@@ -159,6 +159,7 @@ function createPlayer() {
         admin: { authed: false, fly: false, speedMult: 1, gravityMult: 1, jumpMult: 1 },
         isPlayerRef: true,
         pushBlockedThisTick: false,
+        ghost: false,
     };
 }
 
@@ -194,10 +195,10 @@ function applyDismounts(playerList) {
 function resolveMovement(player, objects, keys, otherPlayers) {
     const admin = player.admin;
 
-    if (admin && admin.fly) {
+    if ((admin && admin.fly) || player.ghost) {
         const forward = { x: -Math.sin(player.angleY), z: -Math.cos(player.angleY) };
         const right = { x: Math.cos(player.angleY), z: -Math.sin(player.angleY) };
-        const flySpeed = PLAYER_SPEED * admin.speedMult;
+        const flySpeed = PLAYER_SPEED * (admin ? admin.speedMult : 1);
 
         let dx = 0, dy = 0, dz = 0;
         if (keys.w) { dx += forward.x * flySpeed; dz += forward.z * flySpeed; }
@@ -357,7 +358,7 @@ function applyPendingMove(player, objects) {
     const { x: dx, y: dy, z: dz } = player.pendingDelta;
     const newPos = { x: player.position.x + dx, y: player.position.y + dy, z: player.position.z + dz };
 
-    const flying = player.admin && player.admin.fly;
+    const flying = (player.admin && player.admin.fly) || player.ghost;
     if (!flying) {
         for (const object of objects) {
             if (object.special !== "kill") continue;
