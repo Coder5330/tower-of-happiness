@@ -80,6 +80,7 @@ function clearPlatforms() {
 }
 
 function loadLevel(levelData) {
+    if (window.Autoplay) Autoplay.setLevel(levelData);
     clearPlatforms();
     levelData.forEach((p) => {
         platformMeshesByLevelIndex.push(addPlatform(p));
@@ -551,6 +552,7 @@ function connect() {
         } else if (msg.type === 'welcome') {
             myId = msg.id;
             myRoomKind = msg.roomKind;
+            if (window.Autoplay) Autoplay.setMe(msg.id, msg.roomKind);
             currentPhase = msg.phase;
             myIsHost = !!msg.isHost;
             if (msg.towerPool) towerPool = msg.towerPool;
@@ -576,6 +578,7 @@ function connect() {
 
         } else if (msg.type === 'phase') {
             currentPhase = msg.phase;
+            if (window.Autoplay) Autoplay.setPhase(msg.phase);
             if (msg.phase !== 'choosing') hideTowerChoice();
             updateLobbyVisibility(null);
 
@@ -588,6 +591,7 @@ function connect() {
             logToConsole(`[PLAYER${msg.id} HAS LEFT THE GAME]`);
 
         } else if (msg.type === 'state') {
+            if (window.Autoplay) Autoplay.onState(msg);
             for (const [idStr, pos] of Object.entries(msg.players)) {
                 const id = Number(idStr);
                 const entry = ensurePlayerMesh(id);
@@ -622,6 +626,7 @@ function connect() {
             if (typeof msg.roundMsLeft === 'number') roundTimerEl.textContent = formatRoundTime(msg.roundMsLeft);
 
         } else if (msg.type === 'round_result') {
+            if (window.Autoplay) Autoplay.onResult(msg);
             if (msg.winner === myId) {
                 showRoundBanner('YOU WIN!');
             } else if (msg.winner !== null) {
@@ -651,6 +656,7 @@ connect();
 
 function sendInput() {
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    if (window.Autoplay && Autoplay.isRunning()) return;   // autoplay sends its own
     const payload = consoleOpen
         ? { type: 'input', keys: { w: false, a: false, s: false, d: false, jump: false, down: false }, angleY }
         : {
@@ -666,10 +672,29 @@ function sendInput() {
 
 const keys = {};
 
+if (window.Autoplay) {
+    // Autoplay transmits on its own schedule (jumps have to leave on an exact
+    // tick), and steers the camera with the same angle it sends to the server.
+    Autoplay.transmit = (autoKeys, autoAngle) => {
+        angleY = autoAngle;
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'input', keys: autoKeys, angleY: autoAngle }));
+        }
+    };
+    Autoplay.requestStartRound = () => {
+        if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'start_round' }));
+    };
+    Autoplay.log = (text) => logToConsole(text);
+}
+
 window.addEventListener('keydown', (e) => {
     if (consoleOpen) {
         if (e.key === 'Escape') closeAdminConsole();
         return;
+    }
+    // Touching a movement key takes the controls back off the bot.
+    if (window.Autoplay && Autoplay.isRunning() && ['w', 'a', 's', 'd', ' '].includes(e.key)) {
+        Autoplay.stop();
     }
     keys[e.key] = true;
     if (e.key === 'Tab') {
@@ -703,7 +728,7 @@ function logToConsole(text) {
     while (chatLogEl.children.length > CHAT_MAX_LINES) chatLogEl.removeChild(chatLogEl.firstChild);
 }
 
-const KNOWN_COMMANDS = ['help', 'fly', 'speed', 'gravity', 'jump', 'teleport', 'logout'];
+const KNOWN_COMMANDS = ['help', 'fly', 'speed', 'gravity', 'jump', 'teleport', 'autoplay', 'logout'];
 
 function openAdminConsole() {
     consoleOpen = true;
@@ -723,6 +748,11 @@ function closeAdminConsole() {
     consoleOpen = false;
     adminConsoleEl.classList.add('hidden');
     adminConsoleInputEl.blur();
+}
+
+function adminFlyOn() {
+    const el = document.getElementById('adminFly');
+    return !!(el && el.checked);
 }
 
 function sendAdminCmd(cmd, value, target) {
@@ -761,7 +791,8 @@ function handleConsoleCommand(text) {
     logToConsole('> ' + trimmed);
 
     if (cmd === 'help') {
-        logToConsole('commands: fly on|off, speed <n>, gravity <n>, jump <n>, teleport top|spawn, logout');
+        logToConsole('commands: fly on|off, speed <n>, gravity <n>, jump <n>, teleport top|spawn,');
+        logToConsole('          autoplay on|off|status, logout');
         return;
     }
 
@@ -785,6 +816,24 @@ function handleConsoleCommand(text) {
         case 'teleport':
             sendAdminCmd('teleport', null, rest[0]);
             break;
+        // Hands the controls to the climbing bot. Unlike the other cheats this
+        // one is pure input: it plays the tower with w, space and the mouse,
+        // under the same physics as everyone else.
+        case 'autoplay': {
+            if (!window.Autoplay) { logToConsole('autoplay unavailable'); break; }
+            if (rest[0] === 'status') {
+                const st = Autoplay.status();
+                logToConsole(Autoplay.isRunning()
+                    ? `climbing: platform ${st.step} of ${st.steps}, ${st.jumps} jumps, ${st.falls} falls`
+                    : 'autoplay is off');
+                break;
+            }
+            if (rest[0] === 'off') { Autoplay.stop(); break; }
+            if (adminFlyOn()) logToConsole('note: fly is on — turn it off or the bot cannot land');
+            Autoplay.start();
+            closeAdminConsole();
+            break;
+        }
         case 'logout':
             adminAuthed = false;
             adminPanelEl.classList.add('hidden');
