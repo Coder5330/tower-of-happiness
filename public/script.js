@@ -503,14 +503,30 @@ ownGlove.visible = false;
 camera.add(ownGlove);
 scene.add(camera);
 
+const SWING_MS = 220;
+
+// 0 at rest, peaks mid-swing: the glove goes out and comes back.
+function swingThrust(until, now) {
+    const t = Math.max(0, (until - now) / SWING_MS);
+    return Math.sin(t * Math.PI);
+}
+
 function updateOwnGlove(now) {
     const armed = myProfile.items.includes('glove') && mode === 1;
     ownGlove.visible = armed;
     if (!armed) return;
-    const swing = Math.max(0, (swingUntil - now) / 220);        // 1 at the punch, 0 at rest
-    const thrust = Math.sin(swing * Math.PI);                   // out and back
+    const thrust = swingThrust(swingUntil, now);
     ownGlove.position.set(0.34 - thrust * 0.08, -0.3 + thrust * 0.12, -0.55 - thrust * 0.45);
     ownGlove.rotation.set(thrust * 0.5, 0, 0);
+}
+
+// The same swing on the player model, which is what everyone else sees — and
+// what you see of yourself in third person.
+function updateWorldGlove(entry, now) {
+    if (!entry.glove) return;
+    const thrust = swingThrust(entry.swingUntil || 0, now);
+    entry.glove.position.set(0.42 - thrust * 0.12, 0.25 + thrust * 0.1, -0.5 - thrust * 0.5);
+    entry.glove.rotation.x = -thrust * 0.7;
 }
 
 function removePlayerMesh(id) {
@@ -768,6 +784,8 @@ function connect() {
             else if (msg.reason === 'declined') logToConsole('Not enough coins for that');
 
         } else if (msg.type === 'punch') {
+            const puncher = remotePlayers.get(msg.id);
+            if (puncher) puncher.swingUntil = performance.now() + SWING_MS;
             if (msg.id === myId) swingArm();
             const hit = (msg.hits || []).includes(myId);
             if (hit) shakeUntil = performance.now() + 220;
@@ -800,7 +818,7 @@ function sendInput() {
 let swingUntil = 0;
 let shakeUntil = 0;
 
-function swingArm() { swingUntil = performance.now() + 220; }
+function swingArm() { swingUntil = performance.now() + SWING_MS; }
 
 function canPunch() {
     return myProfile.items.includes('glove') && myRoomKind === 'main' && currentPhase === 'playing';
@@ -1030,11 +1048,20 @@ function animate() {
 
     sendInput();
 
+    const nowMs = performance.now();
+
     for (const entry of remotePlayers.values()) {
         entry.mesh.position.x += (entry.target.x - entry.mesh.position.x) * LERP_RATE;
         entry.mesh.position.y += (entry.target.y - entry.mesh.position.y) * LERP_RATE;
         entry.mesh.position.z += (entry.target.z - entry.mesh.position.z) * LERP_RATE;
+        updateWorldGlove(entry, nowMs);
     }
+
+    // Other players' bodies are turned by the angle the server sends; your own
+    // follows the view directly, so in third person you can see which way you
+    // are facing — and which way you just punched.
+    const myEntry = remotePlayers.get(myId);
+    if (myEntry) myEntry.mesh.rotation.y = angleY;
 
     for (const entry of meteorMeshes.values()) {
         entry.mesh.position.x += (entry.target.x - entry.mesh.position.x) * LERP_RATE;
@@ -1046,7 +1073,6 @@ function animate() {
 
     const me = remotePlayers.get(myId);
     const playerHeight = 2;
-    const nowMs = performance.now();
     updateOwnGlove(nowMs);
     // Taking a punch shoves the view about for a moment, so it's obvious what
     // just happened to you.
