@@ -528,14 +528,36 @@ canvas {
 
 
 
+/* The room menu is a flex column whose children each set their own width —
+   matching #practiceToggleBtn keeps the shop from stretching edge to edge. */
 #shopToggleBtn {
-  margin-top: 10px;
-  width: 100%;
+  font-family: sans-serif;
+  font-weight: bold;
+  font-size: 13px;
+  padding: 8px 14px;
+  border-radius: 6px;
+  border: none;
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+  cursor: pointer;
+  width: min(360px, 85vw);
+}
+
+#shopToggleBtn:hover {
+  background: rgba(255, 255, 255, 0.18);
+}
+
+#shopCoinsInline {
+  color: #ffd700;
 }
 
 #shopPanel {
-  margin-top: 10px;
-  text-align: left;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: min(360px, 85vw);
+  font-family: sans-serif;
+  color: #fff;
 }
 
 #shopPanel.hidden {
@@ -548,26 +570,54 @@ canvas {
   justify-content: space-between;
   gap: 10px;
   padding: 10px 12px;
-  margin-bottom: 6px;
-  border: 1px solid rgba(255, 255, 255, 0.2);
   border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
   background: rgba(255, 255, 255, 0.06);
+  text-align: left;
 }
 
 .shopItemName {
+  font-size: 13px;
   font-weight: bold;
 }
 
 .shopItemNote {
   display: block;
-  font-size: 12px;
-  opacity: 0.7;
+  margin-top: 3px;
+  font-size: 11px;
   font-weight: normal;
+  line-height: 1.35;
+  opacity: 0.65;
+}
+
+.shopItem button {
+  font-family: sans-serif;
+  font-weight: bold;
+  font-size: 12px;
+  padding: 7px 12px;
+  border-radius: 6px;
+  border: none;
+  background: #3498db;
+  color: #fff;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.shopItem button:hover:not(:disabled) {
+  background: #4aa8e8;
+}
+
+.shopItem button:disabled {
+  background: rgba(255, 255, 255, 0.12);
+  color: rgba(255, 255, 255, 0.45);
+  cursor: not-allowed;
 }
 
 .shopItemOwned {
-  color: #2ecc71;
+  font-size: 12px;
   font-weight: bold;
+  color: #2ecc71;
+  white-space: nowrap;
 }
 
 #coinCounter {
