@@ -4,7 +4,9 @@
   "description": "",
   "main": "server.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "towers": "node build-towers.js",
+    "verify": "node verify-towers.js",
+    "start": "node server.js"
   },
   "keywords": [],
   "author": "",

@@ -6,7 +6,7 @@ const crypto = require('crypto');
 const { buildObjects, advanceMovingPlatforms, createPlayer, resolveMovement, resolvePush, applyPendingMove, applyDismounts, respawnPlayer, hitTestFor } = require('./physics');
 const { SPAWN_POSITION, TOWER_HEIGHT, GROUND_AREA, PLAYER_SIZE } = require('./levels');
 const { recordWin, getProfile, awardCoins, buyItem } = require('./db');
-const { TOWER_POOL, buildTowerLevel, randomTowerId, randomTowerChoices } = require('./towers');
+const { TOWER_POOL, buildTowerLevel, warmTowerPool, randomTowerId, randomTowerChoices } = require('./towers');
 
 const PORT = process.env.PORT || 8080;
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -593,6 +593,18 @@ const wss = new WebSocketServer({ server: httpServer });
 
 httpServer.listen(PORT, () => {
     console.log(`Serving game + WebSocket on :${PORT}`);
+    // Normally every tower has already been loaded from towers.json and this
+    // does nothing. It only has work to do when that file is missing or was
+    // built from a different seed, and then it generates the pool a tower at a
+    // time *after* the port is open — so a deploy starts answering immediately
+    // instead of looking dead while it simulates a few hundred jumps.
+    const startedAt = Date.now();
+    warmTowerPool((generated) => {
+        if (generated) {
+            console.log(`Generated ${generated} tower(s) in ${((Date.now() - startedAt) / 1000).toFixed(1)}s ` +
+                '— run `npm run towers` to bake them into towers.json and skip this next time');
+        }
+    });
 });
 
 // Sockets that haven't picked a room yet live here, keyed by the ws itself.

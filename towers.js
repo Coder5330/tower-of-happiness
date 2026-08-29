@@ -1,3 +1,5 @@
+const fs = require('fs');
+const path = require('path');
 const { TOWER_HEIGHT, GROUND_AREA, PLAYER_SIZE, JUMP_VELOCITY, GRAVITY, TERMINAL_VELOCITY, PLAYER_SPEED } = require('./levels');
 const { buildObjects, createPlayer, resolveMovement, applyPendingMove, advanceMovingPlatforms } = require('./physics');
 
@@ -568,6 +570,36 @@ const TOWER_POOL = Array.from({ length: 12 }, (_, i) => ({
 
 const towerLevelCache = new Map();
 
+// Towers are generated from a seed, but generating the pool takes tens of
+// seconds — every jump in every tower gets simulated — which is far too long to
+// do while a deploy is trying to answer its first request. So the pool is baked
+// into towers.json (run `npm run towers`) and simply loaded here. The file is
+// plain data, one platform per line, and is meant to be hand-editable: tweak a
+// platform, run `npm run verify` to check the climb still works.
+//
+// If the file is missing, or was built from a different seed, towers are
+// generated on demand instead and the server still works — just slower to warm
+// up. TOWERS_REBUILD=1 ignores the file entirely, which is how it's rebuilt.
+function loadBakedTowers() {
+    if (process.env.TOWERS_REBUILD) return 0;
+    let raw;
+    try {
+        raw = JSON.parse(fs.readFileSync(path.join(__dirname, 'towers.json'), 'utf8'));
+    } catch (err) {
+        if (err.code !== 'ENOENT') console.warn('towers.json could not be read:', err.message);
+        return 0;
+    }
+    if (!raw || raw.seed !== SEED_SALT || !Array.isArray(raw.towers)) {
+        console.warn(`towers.json was built from seed ${raw && raw.seed} but this server runs ` +
+            `seed ${SEED_SALT} — regenerating towers instead (run: npm run towers)`);
+        return 0;
+    }
+    for (const tower of raw.towers) {
+        if (Array.isArray(tower.level)) towerLevelCache.set(tower.id, tower.level);
+    }
+    return towerLevelCache.size;
+}
+
 function buildTowerLevel(towerId) {
     if (towerLevelCache.has(towerId)) return towerLevelCache.get(towerId);
     const meta = TOWER_POOL.find((t) => t.id === towerId) || TOWER_POOL[0];
@@ -576,10 +608,27 @@ function buildTowerLevel(towerId) {
     return lvl;
 }
 
-// Every tower is verified and cached once up front, at server startup, rather
-// than the first time a room happens to request it (which would otherwise
-// briefly stall handling requests while a tower's jumps get simulated).
-for (const t of TOWER_POOL) buildTowerLevel(t.id);
+// Towers are cached once built, and generating the pool takes long enough
+// (tens of seconds — every jump in every tower gets simulated) that doing it
+// before the server binds its port leaves deploys serving nothing at all.
+// So the caller starts the server first and warms the pool afterwards, a
+// tower at a time, yielding between each so requests are served throughout.
+// Anything that asks for a tower before its turn just builds it on demand.
+const bakedCount = loadBakedTowers();
+if (bakedCount) console.log(`Loaded ${bakedCount} towers from towers.json`);
+
+function warmTowerPool(onDone) {
+    const pending = TOWER_POOL.filter((t) => !towerLevelCache.has(t.id));
+    let i = 0;
+    (function next() {
+        if (i >= pending.length) {
+            if (onDone) onDone(pending.length);
+            return;
+        }
+        buildTowerLevel(pending[i++].id);
+        setImmediate(next);
+    })();
+}
 
 // Tower geometry is seeded, so the pool is byte-identical on every deploy; the
 // only thing that varies between rooms is which of the 12 gets picked. Set
@@ -602,4 +651,7 @@ function randomTowerChoices(n) {
     return picks;
 }
 
-module.exports = { TOWER_POOL, buildTowerLevel, randomTowerId, randomTowerChoices, simulateJump, simulateRide, topY, towerFailures };
+module.exports = {
+    TOWER_POOL, SEED_SALT, buildTowerLevel, warmTowerPool, randomTowerId, randomTowerChoices,
+    simulateJump, simulateRide, topY, towerFailures,
+};
