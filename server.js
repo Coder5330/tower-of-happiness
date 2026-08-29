@@ -3,7 +3,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { buildObjects, advanceMovingPlatforms, createPlayer, resolveMovement, resolvePush, applyPendingMove, applyDismounts, respawnPlayer, hitTestFor } = require('./physics');
+const { buildObjects, advanceMovingPlatforms, createPlayer, resolveMovement, resolvePush, applyPendingMove, applyDismounts, respawnPlayer, hitTestFor, refuelRockets, ROCKET_FUEL_TICKS } = require('./physics');
 const { SPAWN_POSITION, TOWER_HEIGHT, GROUND_AREA, PLAYER_SIZE } = require('./levels');
 const { recordWin, getProfile, awardCoins, buyItem } = require('./db');
 const { TOWER_POOL, buildTowerLevel, warmTowerPool, randomTowerId, randomTowerChoices } = require('./towers');
@@ -47,8 +47,21 @@ const LAVA_RESET_ABOVE = TOWER_HEIGHT + 10;
 // rooms - practice rooms are for people who just want to climb, and being
 // knocked off a platform there would only be griefing.
 const SHOP = {
+    hat: { price: 1, name: 'Party hat' },
+    banana: { price: 3, name: 'Banana peel' },
     glove: { price: 5, name: 'Punching glove' },
+    rockets: { price: 20, name: 'Rocket boosters' },
 };
+
+const BANANAS_PER_ROUND = 3;
+const BANANA_LIFETIME_MS = 45000;
+const BANANA_RADIUS = 0.75;
+const BANANA_HEIGHT = 1.4;
+const BANANA_SLIDE = 0.34;             // per tick, before decay — slippier than a punch
+const BANANA_LIFT = 0.1;
+const BANANA_TICKS = 14;
+const BANANA_ARM_MS = 900;             // grace period before it can catch its owner
+const BANANA_COOLDOWN_MS = 500;
 const COINS_PER_WIN = 1;
 const COINS_FAST_WIN_BONUS = 1;        // still had a minute on the clock
 const FAST_WIN_SECONDS = 60;
@@ -110,6 +123,8 @@ function createRoom({ id, kind, name, permanent, maxPlayers, towerId, hostWs }) 
         nextId: 1,
         freeIds: [],
         meteors: [],
+        bananas: [],
+        nextBananaId: 1,
         pendingExplosions: [],
         nextMeteorId: 1,
         ticksUntilMeteor: nextSpawnTicks(),
@@ -293,6 +308,7 @@ function resetToLobby(room) {
     room.phase = room.kind === 'main' ? 'waiting' : 'practice';
     room.gimmick.lavaY = LAVA_START_Y;
     room.meteors.length = 0;
+    room.bananas.length = 0;
     room.roundEndAt = null;
     room.pendingChoice = null;
     for (const { player } of room.players.values()) {
@@ -307,9 +323,15 @@ function startRound(room) {
     room.phase = 'playing';
     room.roundEndAt = Date.now() + ROUND_DURATION_MS;
     room.gimmick.lavaY = LAVA_START_Y;
-    for (const { player } of room.players.values()) {
+    room.bananas.length = 0;
+    for (const [id, { ws: sock, player }] of room.players.entries()) {
         player.ghost = false;
+        // Peels and rocket fuel are per round, so nobody hoards them.
+        const conn = connections.get(sock);
+        player.bananasLeft = conn && conn.profile && conn.profile.items.includes('banana') ? BANANAS_PER_ROUND : 0;
+        refuelRockets(player);
         respawnPlayer(player);
+        if (conn) sendProfile(conn);
     }
     broadcastRaw(room, { type: 'phase', phase: room.phase });
 }
@@ -373,20 +395,88 @@ function payOutWin(room, id, secondsLeft) {
     const coins = COINS_PER_WIN + (secondsLeft > FAST_WIN_SECONDS ? COINS_FAST_WIN_BONUS : 0);
     awardCoins(conn.playerKey, coins).then((profile) => {
         conn.profile = profile;
-        entry.player.hasGlove = profile.items.includes('glove');
+        applyKit(entry.player, profile);
         sendProfile(conn, { earned: coins });
     });
 }
 
+// Everything a purchase changes about the player in the world, in one place.
+function applyKit(player, profile) {
+    const items = (profile && profile.items) || [];
+    player.hasGlove = items.includes('glove');
+    player.hasHat = items.includes('hat');
+    player.rocket = items.includes('rockets') ? { fuel: ROCKET_FUEL_TICKS, burn: 0 } : null;
+    if (!items.includes('banana')) player.bananasLeft = 0;
+}
+
 function sendProfile(conn, extra) {
     if (!conn.profile || conn.ws.readyState !== conn.ws.OPEN) return;
+    const entry = conn.room && conn.playerId != null ? conn.room.players.get(conn.playerId) : null;
     conn.ws.send(JSON.stringify(Object.assign({
         type: 'profile',
         coins: conn.profile.coins,
         items: conn.profile.items,
         wins: conn.profile.wins,
+        bananas: entry ? entry.player.bananasLeft || 0 : 0,
         shop: SHOP,
     }, extra || {})));
+}
+
+// Peels sit on whatever you were standing on and catch anyone who walks over
+// them — including whoever dropped it, once it has had a moment to arm, which
+// is much funnier than making it safe for the owner.
+function dropBanana(room, id, player, conn) {
+    if (room.kind !== 'main' || room.phase !== 'playing') return;
+    if (!conn.profile || !conn.profile.items.includes('banana')) return;
+    if (player.ghost) return;
+
+    const now = Date.now();
+    if (now - (conn.lastBananaAt || 0) < BANANA_COOLDOWN_MS) return;
+    if ((player.bananasLeft || 0) <= 0) return;
+    conn.lastBananaAt = now;
+    player.bananasLeft--;
+
+    room.bananas.push({
+        id: room.nextBananaId++,
+        x: player.position.x,
+        y: player.position.y - PLAYER_SIZE.height / 2,
+        z: player.position.z,
+        ownerId: id,
+        armedAt: now + BANANA_ARM_MS,
+        expiresAt: now + BANANA_LIFETIME_MS,
+    });
+    sendProfile(conn);
+}
+
+function stepBananas(room) {
+    if (!room.bananas.length) return;
+    const now = Date.now();
+
+    for (let i = room.bananas.length - 1; i >= 0; i--) {
+        const peel = room.bananas[i];
+        if (now > peel.expiresAt) { room.bananas.splice(i, 1); continue; }
+
+        for (const [id, { player }] of room.players.entries()) {
+            if (player.ghost) continue;
+            if (id === peel.ownerId && now < peel.armedAt) continue;
+            const foot = player.position.y - PLAYER_SIZE.height / 2;
+            if (Math.abs(foot - peel.y) > BANANA_HEIGHT) continue;
+            if (Math.hypot(player.position.x - peel.x, player.position.z - peel.z) > BANANA_RADIUS) continue;
+
+            // Slip in the direction you were facing, so you skid off the front
+            // of whatever you were crossing.
+            const slideX = -Math.sin(player.angleY);
+            const slideZ = -Math.cos(player.angleY);
+            player.knockback = { x: slideX * BANANA_SLIDE, z: slideZ * BANANA_SLIDE, ticks: BANANA_TICKS };
+            player.y_vel = Math.max(player.y_vel, BANANA_LIFT);
+            player.on_ground = false;
+            player.ridingPlatform = null;
+
+            broadcastRaw(room, { type: 'slip', id, x: peel.x, y: peel.y, z: peel.z });
+            room.bananas.splice(i, 1);
+            break;
+        }
+    }
 }
 
 function punch(room, id, player, conn) {
@@ -427,7 +517,8 @@ function broadcastState(room) {
     for (const [id, { player }] of room.players.entries()) {
         playerState[id] = {
             x: player.position.x, y: player.position.y, z: player.position.z,
-            angleY: player.angleY, ghost: player.ghost, glove: !!player.hasGlove,
+            angleY: player.angleY, ghost: player.ghost,
+            glove: !!player.hasGlove, hat: !!player.hasHat, boosting: !!player.boosting,
         };
     }
 
@@ -445,8 +536,22 @@ function broadcastState(room) {
     const gimmickState = {
         lavaY: room.gimmick.lavaY,
     };
+    const bananaState = room.bananas.map((b) => ({ id: b.id, x: b.x, y: b.y, z: b.z }));
+
+    // Fuel and peels left are per player, so they ride along with the state
+    // rather than going out to everyone.
+    for (const [id, { ws: sock, player }] of room.players.entries()) {
+        if (sock.readyState !== sock.OPEN) continue;
+        if (!player.rocket && !player.bananasLeft) continue;
+        sock.send(JSON.stringify({
+            type: 'kit',
+            fuel: player.rocket ? player.rocket.fuel / ROCKET_FUEL_TICKS : 0,
+            bananas: player.bananasLeft || 0,
+        }));
+    }
+
     broadcastRaw(room, {
-        type: 'state', players: playerState, platforms, meteors: meteorState,
+        type: 'state', players: playerState, platforms, meteors: meteorState, bananas: bananaState,
         explosions: explosionState, gimmick: gimmickState,
         phase: room.phase,
         roundMsLeft: room.roundEndAt && room.phase === 'playing' ? Math.max(0, room.roundEndAt - Date.now()) : null,
@@ -454,7 +559,10 @@ function broadcastState(room) {
 }
 
 function stepRoomTick(room) {
-    if (room.kind === 'main' && room.phase === 'playing') stepLava(room);
+    if (room.kind === 'main' && room.phase === 'playing') {
+        stepLava(room);
+        stepBananas(room);
+    }
 
     for (const { player } of room.players.values()) {
         player.pushDelta.x = 0;
@@ -614,7 +722,7 @@ function addPlayerToRoom(ws, conn, room) {
     const id = room.freeIds.length ? room.freeIds.shift() : room.nextId++;
     const player = createPlayer();
     player.keys = { w: false, a: false, s: false, d: false, jump: false, down: false };
-    player.hasGlove = !!(conn.profile && conn.profile.items.includes('glove'));
+    applyKit(player, conn.profile);
     if (room.kind === 'main' && room.phase === 'playing') player.ghost = true; // late joiner spectates till next round
     room.players.set(id, { ws, player });
     conn.room = room;
@@ -633,7 +741,7 @@ wss.on('connection', (ws, req) => {
     const ip = req.socket.remoteAddress;
     const conn = {
         ws, ip, room: null, playerId: null, lastChatAt: 0, pendingRoom: null,
-        pendingRequestId: null, playerKey: null, profile: null, lastPunchAt: 0,
+        pendingRequestId: null, playerKey: null, profile: null, lastPunchAt: 0, lastBananaAt: 0,
     };
     connections.set(ws, conn);
 
@@ -657,7 +765,7 @@ wss.on('connection', (ws, req) => {
                 conn.profile = profile;
                 if (conn.room && conn.playerId != null) {
                     const entry = conn.room.players.get(conn.playerId);
-                    if (entry) entry.player.hasGlove = profile.items.includes('glove');
+                    if (entry) applyKit(entry.player, profile);
                 }
                 sendProfile(conn);
             });
@@ -676,7 +784,13 @@ wss.on('connection', (ws, req) => {
                 conn.profile = profile;
                 if (conn.room && conn.playerId != null) {
                     const entry = conn.room.players.get(conn.playerId);
-                    if (entry) entry.player.hasGlove = profile.items.includes('glove');
+                    if (entry) {
+                        applyKit(entry.player, profile);
+                        // Buying peels mid-round gives you this round's supply.
+                        if (item === 'banana' && conn.room.phase === 'playing') {
+                            entry.player.bananasLeft = BANANAS_PER_ROUND;
+                        }
+                    }
                 }
                 sendProfile(conn, { bought: item });
             });
@@ -790,6 +904,11 @@ wss.on('connection', (ws, req) => {
 
         if (msg.type === 'punch') {
             punch(room, id, entry.player, conn);
+            return;
+        }
+
+        if (msg.type === 'drop_banana') {
+            dropBanana(room, id, entry.player, conn);
             return;
         }
 

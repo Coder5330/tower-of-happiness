@@ -187,6 +187,39 @@ function drawHeightHUD(height) {
     hudCtx.shadowBlur = 4;
     hudCtx.fillText(`${Math.floor(height)}m`, barX + barWidth + 12, indicatorY + 5);
     hudCtx.shadowBlur = 0;
+
+    drawKitHUD(barX, barY + barHeight + 24);
+}
+
+// Rocket fuel and peels left, under the height bar. Both are per round, so
+// they only mean anything while one is running.
+function drawKitHUD(x, y) {
+    if (currentPhase !== 'playing') return;
+
+    let line = y;
+    if (myProfile.items.includes('rockets')) {
+        const w = 90, h = 8;
+        hudCtx.fillStyle = 'rgba(0, 0, 0, 0.45)';
+        hudCtx.fillRect(x - 2, line - 2, w + 4, h + 4);
+        hudCtx.fillStyle = myKit.fuel > 0.25 ? '#ff9f1a' : '#e74c3c';
+        hudCtx.fillRect(x, line, w * Math.max(0, Math.min(1, myKit.fuel)), h);
+        hudCtx.strokeStyle = 'rgba(255, 255, 255, 0.7)';
+        hudCtx.lineWidth = 1;
+        hudCtx.strokeRect(x, line, w, h);
+        hudCtx.fillStyle = '#fff';
+        hudCtx.font = 'bold 11px sans-serif';
+        hudCtx.fillText('BOOST', x + w + 8, line + h);
+        line += h + 16;
+    }
+
+    if (myProfile.items.includes('banana')) {
+        hudCtx.fillStyle = myKit.bananas ? '#f1c40f' : 'rgba(255, 255, 255, 0.4)';
+        hudCtx.font = 'bold 13px sans-serif';
+        hudCtx.shadowColor = 'rgba(0, 0, 0, 0.8)';
+        hudCtx.shadowBlur = 4;
+        hudCtx.fillText(`${myKit.bananas} peel${myKit.bananas === 1 ? '' : 's'}  (Q)`, x, line + 10);
+        hudCtx.shadowBlur = 0;
+    }
 }
 
 let myId = null;
@@ -231,6 +264,7 @@ function playerKey() {
 }
 
 let myProfile = { coins: 0, items: [], wins: 0 };
+let myKit = { fuel: 0, bananas: 0 };
 let shopListings = {};
 
 let myRoomKind = null;
@@ -277,7 +311,10 @@ const coinCounterEl = document.getElementById('coinCounter');
 const coinCountEl = document.getElementById('coinCount');
 
 const ITEM_NOTES = {
-    glove: 'Punch other climbers off the tower. Competitive rooms only — click to swing.',
+    hat: 'A party hat. Does nothing whatsoever.',
+    banana: 'Three peels a round, dropped with Q. Catches anyone who walks over one — including you.',
+    glove: 'Punch other climbers off the tower. Click to swing.',
+    rockets: 'Hold jump in mid-air to burn fuel and roughly double your jump. Enough for about two a round.',
 };
 
 function renderShop() {
@@ -477,13 +514,45 @@ function ensurePlayerMesh(id) {
     mesh.visible = !(id === myId && mode === 1); 
     mesh.position.set(SPAWN_POSITION.x, SPAWN_POSITION.y, SPAWN_POSITION.z);
     scene.add(mesh);
-    const entry = { mesh, target: { ...SPAWN_POSITION }, glove: null };
+    const entry = { mesh, target: { ...SPAWN_POSITION }, glove: null, hat: null, flame: null, swingUntil: 0 };
     remotePlayers.set(id, entry);
     return entry;
 }
 
 const gloveGeometry = new THREE.BoxGeometry(0.42, 0.42, 0.42);
 const gloveMaterial = new THREE.MeshStandardMaterial({ color: 0xd63031 });
+const hatGeometry = new THREE.ConeGeometry(0.32, 0.55, 12);
+const hatMaterial = new THREE.MeshStandardMaterial({ color: 0xe84393 });
+const flameGeometry = new THREE.ConeGeometry(0.24, 0.7, 10);
+const flameMaterial = new THREE.MeshBasicMaterial({ color: 0xff9f1a, transparent: true, opacity: 0.9 });
+
+function setHat(entry, worn) {
+    if (worn && !entry.hat) {
+        entry.hat = new THREE.Mesh(hatGeometry, hatMaterial);
+        entry.hat.position.set(0, 1.28, 0);
+        entry.mesh.add(entry.hat);
+    } else if (!worn && entry.hat) {
+        entry.mesh.remove(entry.hat);
+        entry.hat = null;
+    }
+}
+
+// Boosters only show while they're firing.
+function setFlame(entry, lit) {
+    if (lit && !entry.flame) {
+        entry.flame = new THREE.Mesh(flameGeometry, flameMaterial);
+        entry.flame.rotation.x = Math.PI;               // pointing down
+        entry.flame.position.set(0, -1.25, 0);
+        entry.mesh.add(entry.flame);
+    } else if (!lit && entry.flame) {
+        entry.mesh.remove(entry.flame);
+        entry.flame = null;
+    }
+    if (entry.flame) {
+        const flicker = 0.8 + Math.random() * 0.5;
+        entry.flame.scale.set(1, flicker, 1);
+    }
+}
 
 // Everyone can see who is armed: a red glove on the player's front.
 function setGlove(entry, armed) {
@@ -534,6 +603,60 @@ function removePlayerMesh(id) {
     if (!entry) return;
     scene.remove(entry.mesh);
     remotePlayers.delete(id);
+}
+
+// --- Banana peels ---
+
+const bananaMeshes = new Map();
+const bananaGeometry = new THREE.CylinderGeometry(0.34, 0.34, 0.08, 10);
+const bananaMaterial = new THREE.MeshStandardMaterial({ color: 0xf1c40f });
+
+function syncBananas(list) {
+    const seen = new Set();
+    for (const peel of list) {
+        seen.add(peel.id);
+        let mesh = bananaMeshes.get(peel.id);
+        if (!mesh) {
+            mesh = new THREE.Mesh(bananaGeometry, bananaMaterial);
+            mesh.rotation.z = 0.12;                     // sits at a jaunty angle
+            scene.add(mesh);
+            bananaMeshes.set(peel.id, mesh);
+        }
+        mesh.position.set(peel.x, peel.y + 0.06, peel.z);
+    }
+    for (const [id, mesh] of bananaMeshes.entries()) {
+        if (seen.has(id)) continue;
+        scene.remove(mesh);
+        bananaMeshes.delete(id);
+    }
+}
+
+// A little puff where someone went over
+const slipPuffs = [];
+
+function spawnSlip(at) {
+    const puff = new THREE.Mesh(
+        new THREE.RingGeometry(0.2, 0.5, 16),
+        new THREE.MeshBasicMaterial({ color: 0xf1c40f, transparent: true, opacity: 0.85, side: THREE.DoubleSide })
+    );
+    puff.rotation.x = -Math.PI / 2;
+    puff.position.set(at.x, at.y + 0.1, at.z);
+    scene.add(puff);
+    slipPuffs.push({ mesh: puff, start: performance.now() });
+}
+
+function updateSlipPuffs(now) {
+    for (let i = slipPuffs.length - 1; i >= 0; i--) {
+        const t = (now - slipPuffs[i].start) / 500;
+        if (t >= 1) {
+            scene.remove(slipPuffs[i].mesh);
+            slipPuffs[i].mesh.material.dispose();
+            slipPuffs.splice(i, 1);
+            continue;
+        }
+        slipPuffs[i].mesh.scale.setScalar(1 + t * 2);
+        slipPuffs[i].mesh.material.opacity = 0.85 * (1 - t);
+    }
 }
 
 const meteorMeshes = new Map();
@@ -714,6 +837,7 @@ function connect() {
 
         } else if (msg.type === 'state') {
             if (window.Autoplay) Autoplay.onState(msg);
+            syncBananas(msg.bananas || []);
             for (const [idStr, pos] of Object.entries(msg.players)) {
                 const id = Number(idStr);
                 const entry = ensurePlayerMesh(id);
@@ -722,6 +846,8 @@ function connect() {
                 entry.target.z = pos.z;
                 if (id !== myId) entry.mesh.rotation.y = pos.angleY;
                 setGlove(entry, !!pos.glove);
+                setHat(entry, !!pos.hat);
+                setFlame(entry, !!pos.boosting);
 
                 if (entry.mesh.material.transparent !== !!pos.ghost) {
                     entry.mesh.material.transparent = !!pos.ghost;
@@ -772,6 +898,7 @@ function connect() {
 
         } else if (msg.type === 'profile') {
             myProfile = { coins: msg.coins, items: msg.items || [], wins: msg.wins || 0 };
+            myKit.bananas = msg.bananas || 0;
             shopListings = msg.shop || shopListings;
             renderShop();
             if (msg.earned) {
@@ -782,6 +909,13 @@ function connect() {
             }
             if (msg.bought) logToConsole(`Bought ${(shopListings[msg.bought] || {}).name || msg.bought}`);
             else if (msg.reason === 'declined') logToConsole('Not enough coins for that');
+
+        } else if (msg.type === 'kit') {
+            myKit = { fuel: msg.fuel, bananas: msg.bananas };
+
+        } else if (msg.type === 'slip') {
+            spawnSlip(msg);
+            if (msg.id === myId) shakeUntil = performance.now() + 320;
 
         } else if (msg.type === 'punch') {
             const puncher = remotePlayers.get(msg.id);
@@ -824,9 +958,25 @@ function canPunch() {
     return myProfile.items.includes('glove') && myRoomKind === 'main' && currentPhase === 'playing';
 }
 
+function canDropBanana() {
+    return myProfile.items.includes('banana') && myRoomKind === 'main' &&
+        currentPhase === 'playing' && myKit.bananas > 0;
+}
+
 renderer.domElement.addEventListener('mousedown', (e) => {
-    if (e.button !== 0 || consoleOpen || !canPunch()) return;
-    if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'punch' }));
+    if (e.button !== 0 || consoleOpen) return;
+    if (!myProfile.items.includes('glove')) return;
+
+    // Always swing. Whether it connects is the server's call — it only counts
+    // in a competitive round — but a glove that does nothing at all when you
+    // click it just reads as broken.
+    swingArm();
+    const mine = remotePlayers.get(myId);
+    if (mine) mine.swingUntil = performance.now() + SWING_MS;
+
+    if (canPunch() && ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'punch' }));
+    }
 });
 
 const keys = {};
@@ -854,6 +1004,11 @@ window.addEventListener('keydown', (e) => {
     // Touching a movement key takes the controls back off the bot.
     if (window.Autoplay && Autoplay.isRunning() && ['w', 'a', 's', 'd', ' '].includes(e.key)) {
         Autoplay.stop();
+    }
+    if (e.key === 'q' || e.key === 'Q') {
+        if (canDropBanana() && ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'drop_banana' }));
+        }
     }
     keys[e.key] = true;
     if (e.key === 'Tab') {
@@ -1070,6 +1225,7 @@ function animate() {
     }
 
     updateExplosions();
+    updateSlipPuffs(nowMs);
 
     const me = remotePlayers.get(myId);
     const playerHeight = 2;

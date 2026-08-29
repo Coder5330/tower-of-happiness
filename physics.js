@@ -192,6 +192,16 @@ function applyDismounts(playerList) {
     }
 }
 
+// Rocket boosters: holding jump in mid-air burns fuel to fight gravity, taking
+// a jump's apex from ~2.6 to ~5.6. Deliberately not flight — velocity is capped
+// below the jump's own, each jump can only burn so long, and the round's fuel
+// is two boosts' worth. Without the per-jump cap one continuous hold just flies
+// to the top of the tower (measured: +22.9, which is a third of the climb).
+const ROCKET_THRUST = 0.019;
+const ROCKET_MAX_VEL = 0.23;
+const ROCKET_BURN_PER_JUMP = 18;
+const ROCKET_FUEL_TICKS = ROCKET_BURN_PER_JUMP * 2;
+
 function resolveMovement(player, objects, keys, otherPlayers) {
     const admin = player.admin;
 
@@ -234,6 +244,19 @@ function resolveMovement(player, objects, keys, otherPlayers) {
     if (keys.d) { dx += right.x * speed; dz += right.z * speed; }
     if (keys.a) { dx -= right.x * speed; dz -= right.z * speed; }
     if (keys.jump && player.on_ground) player.y_vel = jumpVelocity;
+
+    // on_ground still reflects last tick here, so this only fires in mid-air.
+    player.boosting = false;
+    if (player.rocket) {
+        if (player.on_ground) player.rocket.burn = 0;   // a fresh jump, a fresh burn
+        if (keys.jump && !player.on_ground && player.rocket.fuel > 0 &&
+            (player.rocket.burn || 0) < ROCKET_BURN_PER_JUMP) {
+            player.y_vel = Math.min(ROCKET_MAX_VEL, player.y_vel + ROCKET_THRUST);
+            player.rocket.fuel--;
+            player.rocket.burn = (player.rocket.burn || 0) + 1;
+            player.boosting = true;
+        }
+    }
 
     player.y_vel -= gravity;
     if (player.y_vel < TERMINAL_VELOCITY) player.y_vel = TERMINAL_VELOCITY;
@@ -345,7 +368,12 @@ function resolvePush(player, pushDelta, objects, otherPlayers) {
     return { x: dx, z: dz, blockedByX, blockedByZ };
 }
 
+function refuelRockets(player) {
+    if (player.rocket) { player.rocket.fuel = ROCKET_FUEL_TICKS; player.rocket.burn = 0; }
+}
+
 function respawnPlayer(player) {
+    refuelRockets(player);
     player.position = randomizedSpawnPosition();
     player.y_vel = 0;
     player.on_ground = false;
@@ -380,5 +408,6 @@ function applyPendingMove(player, objects) {
 
 module.exports = {
     buildObjects, advanceMovingPlatforms, createPlayer, resolveMovement, resolvePush,
-    applyPendingMove, applyDismounts, respawnPlayer, hitTestFor,
+    applyPendingMove, applyDismounts, respawnPlayer, hitTestFor, refuelRockets,
+    ROCKET_FUEL_TICKS,
 };
