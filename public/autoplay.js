@@ -153,13 +153,17 @@
     };
   }
 
+  // Which platform we are stood on. The horizontal window has to allow for
+  // landing right on the lip - the player only needs its box to overlap, so it
+  // can rest up to half its own width past the edge, and a landing the bot
+  // can't name is a landing it throws away.
   function standingIndex(me) {
     var best = -1, bestD = 1e9;
     for (var i = 0; i < B.path.length; i++) {
       var p = B.path[i], q = livePos(p);
       if (Math.abs(me.y - standY(p)) > 0.4) continue;
       var d = Math.hypot(me.x - q.x, me.z - q.z);
-      if (d > halfSpan(p) + 0.7) continue;
+      if (d > halfSpan(p) + 1.1) continue;
       if (d < bestD) { bestD = d; best = i; }
     }
     return best;
@@ -610,13 +614,21 @@
       if (B.phase !== 'playing') {
         idle();
         S.mode = 'waiting-round'; S.step = -1;
+        S.lastProgressAt = performance.now();          // waiting for a round isn't a stall
         if (B.phase === 'waiting' && performance.now() - (B.lastStart || 0) > 1500) {
           B.lastStart = performance.now();
           if (AP.requestStartRound) AP.requestStartRound();
         }
         return;
       }
-      if (me.ghost) { idle(); S.mode = 'ghost'; S.step = -1; return; }
+      // Caught by the lava: ghosts can't win, so there is nothing to do but
+      // wait for the round to reset. That's not a stall either.
+      if (me.ghost) {
+        idle();
+        S.mode = 'ghost'; S.step = -1;
+        S.lastProgressAt = performance.now();
+        return;
+      }
       if (S.mode === 'waiting-round' || S.mode === 'ghost') { S.mode = 'locate'; progress('round live'); }
     }
 
@@ -627,12 +639,21 @@
       // Work out where we are: on a path platform, on the floor, or still falling.
       case 'locate': {
         idle();
+        if (J.locateT === 0) J.locateT = performance.now();
+        // Wedged somewhere that is neither a platform nor the floor: treat it
+        // as a fall so the retry logic gets a turn, rather than standing here.
+        if (performance.now() - J.locateT > 6000) {
+          J.locateT = 0;
+          failStep(-1);
+          return;
+        }
         if (!ySteady()) return;
         var i = standingIndex(me);
-        if (i >= 0) { enterWalk(i); progress('on platform ' + i); }
+        if (i >= 0) { J.locateT = 0; enterWalk(i); progress('on platform ' + i); }
         else if (onFloor(me)) {
           S.mode = 'mount'; S.step = -1; resetApproach();
           J.waitT = performance.now();
+          J.locateT = 0;
         }
         return;
       }
@@ -685,6 +706,19 @@
           if (Math.hypot(me.x - q.x, me.z - q.z) < 0.45) { S.mode = 'ride'; J.waitT = performance.now(); }
           return;
         }
+        // Walking is where the bot loses most of its runs: these platforms are
+        // barely wider than the player, and every step towards the middle is a
+        // chance to step off the edge. So if the jump already works from where
+        // we landed, don't move at all.
+        var nxtNow = B.path[S.step + 1];
+        if (nxtNow && !nxtNow.special && !p.special &&
+            simulateJump(me, faceAngle(me, { x: nxtNow.x, z: nxtNow.z }), nxtNow.__oi, B.cfg.lagTicks) > 0) {
+          idle();
+          S.mode = 'prejump';
+          J.waitT = performance.now();
+          return;
+        }
+
         // Standing on a sphere or a rail pins the player: the box rests exactly
         // tangent to the shape, so every horizontal step reads as a collision
         // and centring never finishes. Take off from wherever we are instead -
