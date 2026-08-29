@@ -527,3 +527,71 @@ canvas {
 }
 
 
+
+#shopToggleBtn {
+  margin-top: 10px;
+  width: 100%;
+}
+
+#shopPanel {
+  margin-top: 10px;
+  text-align: left;
+}
+
+#shopPanel.hidden {
+  display: none !important;
+}
+
+.shopItem {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  margin-bottom: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.shopItemName {
+  font-weight: bold;
+}
+
+.shopItemNote {
+  display: block;
+  font-size: 12px;
+  opacity: 0.7;
+  font-weight: normal;
+}
+
+.shopItemOwned {
+  color: #2ecc71;
+  font-weight: bold;
+}
+
+#coinCounter {
+  position: fixed;
+  top: 12px;
+  right: 14px;
+  z-index: 11;
+  font-family: sans-serif;
+  font-size: 15px;
+  font-weight: bold;
+  color: #ffd700;
+  text-shadow: 0 2px 4px rgba(0, 0, 0, 0.8);
+  pointer-events: none;
+}
+
+#coinCounter.hidden {
+  display: none !important;
+}
+
+#coinCounter.coinGain {
+  animation: coinPop 0.8s ease-out;
+}
+
+@keyframes coinPop {
+  0% { transform: scale(1.6); color: #fff; }
+  100% { transform: scale(1); color: #ffd700; }
+}

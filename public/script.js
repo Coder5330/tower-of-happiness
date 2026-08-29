@@ -217,6 +217,22 @@ const towerChoiceModalEl = document.getElementById('towerChoiceModal');
 const towerChoiceOptionsEl = document.getElementById('towerChoiceOptions');
 const towerChoiceWaitingNoteEl = document.getElementById('towerChoiceWaitingNote');
 
+// No accounts here: coins hang off a key the browser makes up on first visit
+// and keeps. Clearing site data starts you over.
+function playerKey() {
+    let key = null;
+    try { key = localStorage.getItem('towerPlayerKey'); } catch (e) { key = null; }
+    if (!key || !/^[A-Za-z0-9_-]{8,64}$/.test(key)) {
+        key = (crypto.randomUUID ? crypto.randomUUID() : String(Math.random()).slice(2))
+            .replace(/[^A-Za-z0-9_-]/g, '');
+        try { localStorage.setItem('towerPlayerKey', key); } catch (e) { /* private mode */ }
+    }
+    return key;
+}
+
+let myProfile = { coins: 0, items: [], wins: 0 };
+let shopListings = {};
+
 let myRoomKind = null;
 let currentPhase = null;
 let myIsHost = false;
@@ -253,6 +269,62 @@ function renderRoomList(rooms) {
         roomListEl.appendChild(el);
     }
 }
+
+const shopToggleBtnEl = document.getElementById('shopToggleBtn');
+const shopPanelEl = document.getElementById('shopPanel');
+const shopCoinsInlineEl = document.getElementById('shopCoinsInline');
+const coinCounterEl = document.getElementById('coinCounter');
+const coinCountEl = document.getElementById('coinCount');
+
+const ITEM_NOTES = {
+    glove: 'Punch other climbers off the tower. Competitive rooms only — click to swing.',
+};
+
+function renderShop() {
+    shopCoinsInlineEl.textContent = myProfile.coins;
+    coinCountEl.textContent = myProfile.coins;
+    coinCounterEl.classList.toggle('hidden', myProfile.coins === 0 && !myProfile.items.length);
+
+    shopPanelEl.innerHTML = '';
+    for (const [id, listing] of Object.entries(shopListings)) {
+        const owned = myProfile.items.includes(id);
+        const row = document.createElement('div');
+        row.className = 'shopItem';
+
+        const label = document.createElement('div');
+        label.className = 'shopItemName';
+        label.textContent = listing.name;
+        const note = document.createElement('span');
+        note.className = 'shopItemNote';
+        note.textContent = ITEM_NOTES[id] || '';
+        label.appendChild(note);
+        row.appendChild(label);
+
+        if (owned) {
+            const owned0wn = document.createElement('span');
+            owned0wn.className = 'shopItemOwned';
+            owned0wn.textContent = 'Owned';
+            row.appendChild(owned0wn);
+        } else {
+            const buy = document.createElement('button');
+            buy.textContent = `${listing.price} coins`;
+            buy.disabled = myProfile.coins < listing.price;
+            buy.addEventListener('click', () => {
+                if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'buy', item: id }));
+            });
+            row.appendChild(buy);
+        }
+        shopPanelEl.appendChild(row);
+    }
+
+    if (!Object.keys(shopListings).length) {
+        shopPanelEl.textContent = 'Nothing for sale yet.';
+    }
+}
+
+shopToggleBtnEl.addEventListener('click', () => {
+    shopPanelEl.classList.toggle('hidden');
+});
 
 function updateLobbyVisibility(playersObj) {
     const showLobby = myRoomKind === 'main' && currentPhase === 'waiting';
@@ -405,9 +477,40 @@ function ensurePlayerMesh(id) {
     mesh.visible = !(id === myId && mode === 1); 
     mesh.position.set(SPAWN_POSITION.x, SPAWN_POSITION.y, SPAWN_POSITION.z);
     scene.add(mesh);
-    const entry = { mesh, target: { ...SPAWN_POSITION } };
+    const entry = { mesh, target: { ...SPAWN_POSITION }, glove: null };
     remotePlayers.set(id, entry);
     return entry;
+}
+
+const gloveGeometry = new THREE.BoxGeometry(0.42, 0.42, 0.42);
+const gloveMaterial = new THREE.MeshStandardMaterial({ color: 0xd63031 });
+
+// Everyone can see who is armed: a red glove on the player's front.
+function setGlove(entry, armed) {
+    if (armed && !entry.glove) {
+        entry.glove = new THREE.Mesh(gloveGeometry, gloveMaterial);
+        entry.glove.position.set(0.42, 0.25, -0.5);
+        entry.mesh.add(entry.glove);
+    } else if (!armed && entry.glove) {
+        entry.mesh.remove(entry.glove);
+        entry.glove = null;
+    }
+}
+
+// The first-person glove is parented to the camera so it stays in view.
+const ownGlove = new THREE.Mesh(gloveGeometry, gloveMaterial);
+ownGlove.visible = false;
+camera.add(ownGlove);
+scene.add(camera);
+
+function updateOwnGlove(now) {
+    const armed = myProfile.items.includes('glove') && mode === 1;
+    ownGlove.visible = armed;
+    if (!armed) return;
+    const swing = Math.max(0, (swingUntil - now) / 220);        // 1 at the punch, 0 at rest
+    const thrust = Math.sin(swing * Math.PI);                   // out and back
+    ownGlove.position.set(0.34 - thrust * 0.08, -0.3 + thrust * 0.12, -0.55 - thrust * 0.45);
+    ownGlove.rotation.set(thrust * 0.5, 0, 0);
 }
 
 function removePlayerMesh(id) {
@@ -521,7 +624,10 @@ let lastSentInput = null;
 function connect() {
     ws = new WebSocket(SERVER_URL);
 
-    ws.addEventListener('open', () => console.log('connected to game server'));
+    ws.addEventListener('open', () => {
+        console.log('connected to game server');
+        ws.send(JSON.stringify({ type: 'hello', playerKey: playerKey() }));
+    });
 
     ws.addEventListener('close', () => {
         console.warn('disconnected from game server — reload to reconnect');
@@ -599,6 +705,7 @@ function connect() {
                 entry.target.y = pos.y;
                 entry.target.z = pos.z;
                 if (id !== myId) entry.mesh.rotation.y = pos.angleY;
+                setGlove(entry, !!pos.glove);
 
                 if (entry.mesh.material.transparent !== !!pos.ghost) {
                     entry.mesh.material.transparent = !!pos.ghost;
@@ -647,6 +754,24 @@ function connect() {
                 logToConsole(msg.locked ? 'too many failed attempts — locked out temporarily' : 'incorrect code');
             }
 
+        } else if (msg.type === 'profile') {
+            myProfile = { coins: msg.coins, items: msg.items || [], wins: msg.wins || 0 };
+            shopListings = msg.shop || shopListings;
+            renderShop();
+            if (msg.earned) {
+                logToConsole(`+${msg.earned} coin${msg.earned === 1 ? '' : 's'} for the win — ${myProfile.coins} total`);
+                coinCounterEl.classList.remove('coinGain');
+                void coinCounterEl.offsetWidth;                 // restart the animation
+                coinCounterEl.classList.add('coinGain');
+            }
+            if (msg.bought) logToConsole(`Bought ${(shopListings[msg.bought] || {}).name || msg.bought}`);
+            else if (msg.reason === 'declined') logToConsole('Not enough coins for that');
+
+        } else if (msg.type === 'punch') {
+            if (msg.id === myId) swingArm();
+            const hit = (msg.hits || []).includes(myId);
+            if (hit) shakeUntil = performance.now() + 220;
+
         } else if (msg.type === 'chat') {
             logToConsole((msg.id === myId ? 'You' : `Player ${msg.id}`) + ': ' + msg.text);
         }
@@ -669,6 +794,22 @@ function sendInput() {
     lastSentInput = serialized;
     ws.send(serialized);
 }
+
+// Swinging is a click, and only does anything if you own the glove and are in
+// a competitive round — the server checks both, this just avoids the noise.
+let swingUntil = 0;
+let shakeUntil = 0;
+
+function swingArm() { swingUntil = performance.now() + 220; }
+
+function canPunch() {
+    return myProfile.items.includes('glove') && myRoomKind === 'main' && currentPhase === 'playing';
+}
+
+renderer.domElement.addEventListener('mousedown', (e) => {
+    if (e.button !== 0 || consoleOpen || !canPunch()) return;
+    if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'punch' }));
+});
 
 const keys = {};
 
@@ -905,10 +1046,15 @@ function animate() {
 
     const me = remotePlayers.get(myId);
     const playerHeight = 2;
+    const nowMs = performance.now();
+    updateOwnGlove(nowMs);
+    // Taking a punch shoves the view about for a moment, so it's obvious what
+    // just happened to you.
+    const shake = shakeUntil > nowMs ? (shakeUntil - nowMs) / 220 * 0.08 : 0;
     if (me) {
         if (mode === 1) {
-            camera.rotation.y = angleY;
-            camera.rotation.x = angleX;
+            camera.rotation.y = angleY + (shake ? Math.sin(nowMs / 18) * shake : 0);
+            camera.rotation.x = angleX + (shake ? Math.cos(nowMs / 23) * shake : 0);
             camera.position.x = me.mesh.position.x;
             camera.position.y = me.mesh.position.y + playerHeight * 0.5;
             camera.position.z = me.mesh.position.z;

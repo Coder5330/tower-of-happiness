@@ -19,6 +19,8 @@
             <button id="practiceToggleBtn">Practice — pick a tower</button>
             <div id="practicePicker" class="hidden"></div>
             <div id="joinPendingNote" class="hidden">Waiting for the host to approve your join…</div>
+            <button id="shopToggleBtn">Shop — <span id="shopCoinsInline">0</span> coins</button>
+            <div id="shopPanel" class="hidden"></div>
         </div>
 
         <div id="lobbyPanel" class="hidden">
@@ -30,6 +32,8 @@
                 <select id="hostTowerSelect"></select>
             </div>
         </div>
+
+        <div id="coinCounter" class="hidden"><span id="coinCount">0</span> coins</div>
 
         <div id="joinRequestsPanel" class="hidden"></div>
 
@@ -63,7 +67,7 @@
         </div>
 
         <script src="https://unpkg.com/three@0.160.0/build/three.min.js"></script>
-        <script src="autoplay.js?v=1"></script>
-        <script src="script.js?v=20"></script>
+        <script src="autoplay.js?v=2"></script>
+        <script src="script.js?v=21"></script>
     </body>
 </html>

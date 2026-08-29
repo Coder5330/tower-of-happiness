@@ -5,7 +5,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { buildObjects, advanceMovingPlatforms, createPlayer, resolveMovement, resolvePush, applyPendingMove, applyDismounts, respawnPlayer, hitTestFor } = require('./physics');
 const { SPAWN_POSITION, TOWER_HEIGHT, GROUND_AREA, PLAYER_SIZE } = require('./levels');
-const { recordWin } = require('./db');
+const { recordWin, getProfile, awardCoins, buyItem } = require('./db');
 const { TOWER_POOL, buildTowerLevel, randomTowerId, randomTowerChoices } = require('./towers');
 
 const PORT = process.env.PORT || 8080;
@@ -40,6 +40,27 @@ const GROUND_Y = 0;
 const LAVA_RISE_PER_TICK = 0.004;
 const LAVA_START_Y = -10;
 const LAVA_RESET_ABOVE = TOWER_HEIGHT + 10;
+
+// --- Shop ---
+// Winning a round pays coins; coins buy items that persist with the player
+// (see db.js). The punching glove is deliberately limited to competitive
+// rooms - practice rooms are for people who just want to climb, and being
+// knocked off a platform there would only be griefing.
+const SHOP = {
+    glove: { price: 5, name: 'Punching glove' },
+};
+const COINS_PER_WIN = 1;
+const COINS_FAST_WIN_BONUS = 1;        // still had a minute on the clock
+const FAST_WIN_SECONDS = 60;
+
+const PUNCH_RANGE = 2.4;
+const PUNCH_FACING = 0.5;              // dot product: roughly a 60-degree cone
+const PUNCH_HEIGHT = 2;
+const PUNCH_FORCE = 0.28;              // per tick, before decay
+const PUNCH_DECAY = 0.82;
+const PUNCH_TICKS = 10;
+const PUNCH_LIFT = 0.14;
+const PUNCH_COOLDOWN_MS = 700;
 
 const ROUND_DURATION_MS = 5 * 60 * 1000;
 const WIN_HEIGHT = TOWER_HEIGHT - 3; // reaching the top platform counts as the win
@@ -329,6 +350,7 @@ function stepRound(room) {
         const secondsLeft = Math.max(0, (room.roundEndAt - now) / 1000);
         broadcastRaw(room, { type: 'round_result', winner: id, secondsLeft });
         recordWin(secondsLeft);
+        payOutWin(room, id, secondsLeft);
         beginTowerChoice(room, id);
         return;
     }
@@ -339,10 +361,74 @@ function stepRound(room) {
     }
 }
 
+// Winning pays out, and a fast win pays a little more. The profile is pushed
+// straight back to that player so the shop and the coin counter update without
+// them having to reconnect.
+function payOutWin(room, id, secondsLeft) {
+    const entry = room.players.get(id);
+    if (!entry) return;
+    const conn = connections.get(entry.ws);
+    if (!conn || !conn.playerKey) return;
+
+    const coins = COINS_PER_WIN + (secondsLeft > FAST_WIN_SECONDS ? COINS_FAST_WIN_BONUS : 0);
+    awardCoins(conn.playerKey, coins).then((profile) => {
+        conn.profile = profile;
+        entry.player.hasGlove = profile.items.includes('glove');
+        sendProfile(conn, { earned: coins });
+    });
+}
+
+function sendProfile(conn, extra) {
+    if (!conn.profile || conn.ws.readyState !== conn.ws.OPEN) return;
+    conn.ws.send(JSON.stringify(Object.assign({
+        type: 'profile',
+        coins: conn.profile.coins,
+        items: conn.profile.items,
+        wins: conn.profile.wins,
+        shop: SHOP,
+    }, extra || {})));
+}
+
+function punch(room, id, player, conn) {
+    if (room.kind !== 'main' || room.phase !== 'playing') return;
+    if (!conn.profile || !conn.profile.items.includes('glove')) return;
+    if (player.ghost) return;
+
+    const now = Date.now();
+    if (now - (conn.lastPunchAt || 0) < PUNCH_COOLDOWN_MS) return;
+    conn.lastPunchAt = now;
+
+    const forward = { x: -Math.sin(player.angleY), z: -Math.cos(player.angleY) };
+    const hits = [];
+
+    for (const [otherId, { player: target }] of room.players.entries()) {
+        if (otherId === id || target.ghost) continue;
+        const dx = target.position.x - player.position.x;
+        const dz = target.position.z - player.position.z;
+        if (Math.abs(target.position.y - player.position.y) > PUNCH_HEIGHT) continue;
+        const dist = Math.hypot(dx, dz);
+        if (dist > PUNCH_RANGE) continue;
+        const dirX = dist > 0.001 ? dx / dist : forward.x;
+        const dirZ = dist > 0.001 ? dz / dist : forward.z;
+        if (dist > 0.001 && dirX * forward.x + dirZ * forward.z < PUNCH_FACING) continue;
+
+        target.knockback = { x: dirX * PUNCH_FORCE, z: dirZ * PUNCH_FORCE, ticks: PUNCH_TICKS };
+        target.y_vel = Math.max(target.y_vel, PUNCH_LIFT);
+        target.on_ground = false;
+        target.ridingPlatform = null;
+        hits.push(otherId);
+    }
+
+    broadcastRaw(room, { type: 'punch', id, hits });
+}
+
 function broadcastState(room) {
     const playerState = {};
     for (const [id, { player }] of room.players.entries()) {
-        playerState[id] = { x: player.position.x, y: player.position.y, z: player.position.z, angleY: player.angleY, ghost: player.ghost };
+        playerState[id] = {
+            x: player.position.x, y: player.position.y, z: player.position.z,
+            angleY: player.angleY, ghost: player.ghost, glove: !!player.hasGlove,
+        };
     }
 
     const platforms = {};
@@ -374,6 +460,18 @@ function stepRoomTick(room) {
         player.pushDelta.x = 0;
         player.pushDelta.z = 0;
         player.pushBlockedThisTick = false;
+
+        // A punch is just a push that keeps arriving for a few ticks, so it
+        // travels through the same collision and dismount handling as players
+        // shoving each other.
+        const kb = player.knockback;
+        if (kb && kb.ticks > 0) {
+            player.pushDelta.x += kb.x;
+            player.pushDelta.z += kb.z;
+            kb.x *= PUNCH_DECAY;
+            kb.z *= PUNCH_DECAY;
+            kb.ticks--;
+        }
     }
 
     for (const [id, { player }] of room.players.entries()) {
@@ -504,6 +602,7 @@ function addPlayerToRoom(ws, conn, room) {
     const id = room.freeIds.length ? room.freeIds.shift() : room.nextId++;
     const player = createPlayer();
     player.keys = { w: false, a: false, s: false, d: false, jump: false, down: false };
+    player.hasGlove = !!(conn.profile && conn.profile.items.includes('glove'));
     if (room.kind === 'main' && room.phase === 'playing') player.ghost = true; // late joiner spectates till next round
     room.players.set(id, { ws, player });
     conn.room = room;
@@ -520,7 +619,10 @@ function addPlayerToRoom(ws, conn, room) {
 
 wss.on('connection', (ws, req) => {
     const ip = req.socket.remoteAddress;
-    const conn = { ws, ip, room: null, playerId: null, lastChatAt: 0, pendingRoom: null, pendingRequestId: null };
+    const conn = {
+        ws, ip, room: null, playerId: null, lastChatAt: 0, pendingRoom: null,
+        pendingRequestId: null, playerKey: null, profile: null, lastPunchAt: 0,
+    };
     connections.set(ws, conn);
 
     ws.send(JSON.stringify({ type: 'rooms', rooms: roomsSnapshot(), towerPool: TOWER_POOL.map((t) => ({ id: t.id, name: t.name })) }));
@@ -530,6 +632,44 @@ wss.on('connection', (ws, req) => {
         try { msg = JSON.parse(raw); } catch { return; }
         const conn = connections.get(ws);
         if (!conn) return;
+
+        // The browser makes up a key on first visit and keeps it in
+        // localStorage; it is what coins and purchases hang off. There are no
+        // accounts, so it identifies a browser, not a person.
+        if (msg.type === 'hello') {
+            if (conn.playerKey) return;
+            const key = typeof msg.playerKey === 'string' ? msg.playerKey.slice(0, 64) : '';
+            if (!/^[A-Za-z0-9_-]{8,64}$/.test(key)) return;
+            conn.playerKey = key;
+            getProfile(key).then((profile) => {
+                conn.profile = profile;
+                if (conn.room && conn.playerId != null) {
+                    const entry = conn.room.players.get(conn.playerId);
+                    if (entry) entry.player.hasGlove = profile.items.includes('glove');
+                }
+                sendProfile(conn);
+            });
+            return;
+        }
+
+        if (msg.type === 'buy') {
+            const item = typeof msg.item === 'string' ? msg.item : '';
+            const listing = SHOP[item];
+            if (!listing || !conn.playerKey) return;
+            buyItem(conn.playerKey, item, listing.price).then((profile) => {
+                if (!profile) {
+                    sendProfile(conn, { bought: null, reason: 'declined' });
+                    return;
+                }
+                conn.profile = profile;
+                if (conn.room && conn.playerId != null) {
+                    const entry = conn.room.players.get(conn.playerId);
+                    if (entry) entry.player.hasGlove = profile.items.includes('glove');
+                }
+                sendProfile(conn, { bought: item });
+            });
+            return;
+        }
 
         if (msg.type === 'create_room') {
             if (conn.room) return;
@@ -633,6 +773,11 @@ wss.on('connection', (ws, req) => {
                 w: !!k.w, a: !!k.a, s: !!k.s, d: !!k.d, jump: !!k.jump, down: !!k.down,
             };
             if (typeof msg.angleY === 'number') entry.player.angleY = msg.angleY;
+            return;
+        }
+
+        if (msg.type === 'punch') {
+            punch(room, id, entry.player, conn);
             return;
         }
 
