@@ -13,6 +13,14 @@ function collidebox(posA, sizeA, posB, sizeB) {
     );
 }
 
+// Resting exactly on top of something is not a collision — otherwise standing
+// on a sphere, a rail or a triangle pins the player in place, because every
+// horizontal step reads as a hit. Boxes get this for free (their overlap test
+// is a strict <, so touching is not overlapping); the round and pointy shapes
+// need saying explicitly, since exact tangency comes down to a floating point
+// coin flip.
+const TOUCH_EPS = 1e-6;
+
 function collidesphere(spherePos, sphereRadius, boxPos, boxSize) {
     const halfBox = { x: boxSize.width / 2, y: boxSize.height / 2, z: boxSize.depth / 2 };
     const closestX = Math.max(boxPos.x - halfBox.x, Math.min(spherePos.x, boxPos.x + halfBox.x));
@@ -21,7 +29,7 @@ function collidesphere(spherePos, sphereRadius, boxPos, boxSize) {
     const dx = spherePos.x - closestX;
     const dy = spherePos.y - closestY;
     const dz = spherePos.z - closestZ;
-    return (dx * dx + dy * dy + dz * dz) < (sphereRadius * sphereRadius);
+    return (dx * dx + dy * dy + dz * dz) < (sphereRadius * sphereRadius) - TOUCH_EPS;
 }
 
 function collidecylinder(cylinderPos, radius, length, axis, boxPos, boxSize) {
@@ -37,8 +45,8 @@ function collidecylinder(cylinderPos, radius, length, axis, boxPos, boxSize) {
 
 function collidetriangle(triPos, size, height, boxPos, boxSize) {
     const halfHeight = height / 2;
-    if (boxPos.y + boxSize.height / 2 < triPos.y - halfHeight ||
-        boxPos.y - boxSize.height / 2 > triPos.y + halfHeight) {
+    if (boxPos.y + boxSize.height / 2 <= triPos.y - halfHeight ||
+        boxPos.y - boxSize.height / 2 >= triPos.y + halfHeight) {
         return false;
     }
     const h = size * Math.sqrt(3) / 2;

@@ -1,10 +1,3 @@
-// Dev-only tool: independently re-simulates every jump in every generated
-// tower using the real physics engine, against the tower's final geometry.
-// Run with: node verify-towers.js
-//
-// The check itself lives in towers.js as towerFailures(), and the generator
-// refuses to ship a tower that doesn't pass it — so this should always print
-// zero. It exists to catch the generator and the standard drifting apart.
 const { TOWER_POOL, buildTowerLevel, towerFailures } = require('./towers');
 
 let totalJumps = 0, failedJumps = 0;

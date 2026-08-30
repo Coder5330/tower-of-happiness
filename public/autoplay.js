@@ -22,7 +22,8 @@
   function newStatus() {
     return {
       mode: 'idle', step: -1, target: -1, maxY: 0, y: 0, done: false, ok: false,
-      reason: null, note: '', fails: {}, jumps: 0, falls: 0, voids: 0, stuckAt: null, noWindow: null,
+      reason: null, note: '', error: null, fails: {}, jumps: 0, falls: 0, voids: 0,
+      stuckAt: null, noWindow: null, defers: 0, replans: 0, hops: 0, landings: [],
       ghost: false, startedAt: 0, lastProgressAt: 0
     };
   }
@@ -73,13 +74,16 @@
   function setLevel(lvl) {
     B.level = lvl;
     var path = [];
+    var byObject = {};
     for (var i = 0; i < lvl.length; i++) {
       var p = lvl[i];
       if (i < 4 || p.special === 'kill') continue;
       p.__oi = i + 1;
+      byObject[p.__oi] = path.length;
       path.push(p);
     }
     B.path = path;
+    B.stepOfObject = byObject;
   }
 
   function livePos(p) {
@@ -171,6 +175,9 @@
 
   function onFloor(me) { return Math.abs(me.y - 1) < 0.35; }
 
+  // Four samples, not three: three can go steady around the apex of a jump,
+  // where the player is barely moving vertically, and the bot then decides it
+  // has landed while it is still in the air.
   function ySteady() {
     if (B.hist.length < 4) return false;
     var h = B.hist.slice(-4), mn = Infinity, mx = -Infinity;
@@ -254,15 +261,15 @@
   // is exhaustive: if none of them land, none ever will from this spot.
   var PLAN_HORIZON = 220;                              // ticks - a full platform cycle plus slack
   var LEADS = [20, 26, 32, 38, 44, 50];                // how far ahead of the platform to aim
+  var PLAN_FAN = [0, 0.07, -0.07, 0.15, -0.15, 0.25, -0.25];
+  // Nudges tried around a heading: AIM_FAN when lining up a jump, FIRE_FAN in
+  // the instant before taking off.
+  var AIM_FAN = [0, 0.04, -0.04, 0.08, -0.08, 0.14, -0.14, 0.22, -0.22, 0.34, -0.34, 0.5, -0.5];
+  var FIRE_FAN = [0, 0.05, -0.05, 0.1, -0.1];
 
-  function planTakeoff(me, cur, nxt) {
+  function planTakeoff(me, cur, nxt, minStep) {
     var lag = B.cfg.lagTicks;
 
-    // Search the moment and the heading together, and judge every pair with the
-    // engine itself. An approximate arc model used to pre-filter this, but it
-    // agrees with the engine only about half the time, and the moments it threw
-    // away were exactly the ones that worked - which is what made jumps off
-    // moving platforms look impossible when they were merely fussy.
     for (var t0 = 0; t0 <= PLAN_HORIZON; t0 += 4) {
       var pos = predictSelf(me, cur, t0 + lag);
       for (var li = 0; li < LEADS.length; li++) {
@@ -270,11 +277,13 @@
         var dx = q.x - pos.x, dz = q.z - pos.z;
         var d = Math.hypot(dx, dz);
         if (d < 0.001) continue;
-        var ang = Math.atan2(-dx / d, -dz / d);
+        var base = Math.atan2(-dx / d, -dz / d);
+        // Aiming straight at where the platform will be is only a starting
+        // guess; a couple of degrees either side often makes the difference.
         // No use picking a moment we cannot be facing the right way by.
-        if (Math.abs(normAng(ang - curAng)) / B.cfg.turnRate + 2 > t0) continue;
-        var land = simulateJump(pos, ang, nxt.__oi, t0 + lag);
-        if (land > 0) return { at: t0, angle: ang, ticks: land };
+        if (Math.abs(normAng(base - curAng)) / B.cfg.turnRate + 2 > t0) continue;
+        var hit = bestJump(pos, base, PLAN_FAN, t0 + lag, minStep);
+        if (hit) return { at: t0, angle: hit.angle, ticks: hit.ticks, step: hit.step };
       }
     }
     return null;
@@ -326,12 +335,15 @@
            Math.abs(posA.z - posB.z) < (sizeA.depth + sizeB.depth) / 2;
   }
 
+  // Matches physics.js: resting exactly on top of a shape is not a collision.
+  var TOUCH_EPS = 1e-6;
+
   function collideSphere(sc, r, bp, bs) {
     var cx = Math.max(bp.x - bs.width / 2, Math.min(sc.x, bp.x + bs.width / 2));
     var cy = Math.max(bp.y - bs.height / 2, Math.min(sc.y, bp.y + bs.height / 2));
     var cz = Math.max(bp.z - bs.depth / 2, Math.min(sc.z, bp.z + bs.depth / 2));
     var dx = sc.x - cx, dy = sc.y - cy, dz = sc.z - cz;
-    return (dx * dx + dy * dy + dz * dz) < r * r;
+    return (dx * dx + dy * dy + dz * dz) < r * r - TOUCH_EPS;
   }
 
   function collideCylinder(cp, r, len, axis, bp, bs) {
@@ -343,7 +355,7 @@
   }
 
   function collideTriangle(tp, size, height, bp, bs) {
-    if (bp.y + bs.height / 2 < tp.y - height / 2 || bp.y - bs.height / 2 > tp.y + height / 2) return false;
+    if (bp.y + bs.height / 2 <= tp.y - height / 2 || bp.y - bs.height / 2 >= tp.y + height / 2) return false;
     var h = size * Math.sqrt(3) / 2;
     var tri = [
       { x: tp.x, z: tp.z - (2 / 3) * h },
@@ -413,10 +425,9 @@
     }
   }
 
-  // Jump from `pos` on heading `angle`, w held, `t0` ticks from now. Returns the
-  // tick it lands on the platform at level index `targetOi`, or -1 for landing
-  // anywhere else, dying, or falling.
-  function simulateJump(pos, angle, targetOi, t0) {
+  // Jump from `pos` on heading `angle`, w held, `t0` ticks from now. Returns
+  // {ticks, oi} for wherever it lands, or null if it dies or falls.
+  function simulateJumpTo(pos, angle, t0) {
     var objects = simWorld(t0);
     var p = { x: pos.x, y: pos.y, z: pos.z };
     var yVel = 0, onGround = true;
@@ -462,10 +473,65 @@
       }
       p = next;
 
-      if (onGround && t > 2) return bestObj && bestObj.index === targetOi ? t : -1;
-      if (p.y < pos.y - 20) return -1;
+      if (onGround && t > 2) {
+        return bestObj
+          ? { ticks: t, oi: bestObj.index, at: { x: p.x, z: p.z }, obj: bestObj }
+          : null;
+      }
+      if (p.y < pos.y - 20) return null;
     }
-    return -1;
+    return null;
+  }
+
+  // Any landing that gets us further up the climb counts, not just the very
+  // next platform: a jump that carries two steps at once is a jump the bot
+  // used to throw away, and from an awkward spot it is sometimes the only one
+  // that works at all.
+  // How much further the bot could walk after touching down before it runs out
+  // of platform. It always overshoots the simulated landing by a couple of
+  // ticks — it has to guess the landing moment in wall-clock time, and letting
+  // go early lands short instead — so a landing on the lip is a fall waiting to
+  // happen, and one with room to spare is not.
+  function landingMargin(landing, angle) {
+    var p = B.path[B.stepOfObject[landing.oi]];
+    if (!p) return 0;
+    // The player stays up while its box overlaps the platform, so the ground
+    // it can stand on reaches half a player width past the platform's edge.
+    var fp = footprint(p);
+    fp = { x: fp.x + 0.45, z: fp.z + 0.45 };
+    var c = landing.obj.position;
+    var fwd = { x: -Math.sin(angle), z: -Math.cos(angle) };
+    var room = Infinity;
+    if (Math.abs(fwd.x) > 0.001) room = Math.min(room, (fp.x - (landing.at.x - c.x) * Math.sign(fwd.x)) / Math.abs(fwd.x));
+    if (Math.abs(fwd.z) > 0.001) room = Math.min(room, (fp.z - (landing.at.z - c.z) * Math.sign(fwd.z)) / Math.abs(fwd.z));
+    return room;
+  }
+
+  function evaluateJump(pos, angle, t0, minStep) {
+    var landing = simulateJumpTo(pos, angle, t0);
+    if (!landing) return null;
+    var step = B.stepOfObject[landing.oi];
+    if (step === undefined || step < minStep) return null;
+    return { ticks: landing.ticks, step: step, margin: landingMargin(landing, angle) };
+  }
+
+  // First heading in the fan that lands. The fan starts at "straight at the
+  // platform", which is the heading the tower was laid out around, and widens
+  // from there — preferring a different one because it scores better on a
+  // margin estimate made things worse, not better.
+  function bestJump(pos, baseAngle, fan, t0, minStep) {
+    for (var i = 0; i < fan.length; i++) {
+      var ang = baseAngle + fan[i];
+      var hit = evaluateJump(pos, ang, t0, minStep);
+      if (hit) { hit.angle = ang; return hit; }
+    }
+    return null;
+  }
+
+  // Back-compat helper for the single-target checks (the mount).
+  function simulateJump(pos, angle, targetOi, t0) {
+    var landing = simulateJumpTo(pos, angle, t0);
+    return landing && landing.oi === targetOi ? landing.ticks : -1;
   }
 
   // ---- input -------------------------------------------------------------
@@ -563,10 +629,39 @@
     B.S.note = note || B.S.note;
   }
 
+  // Standing on a sphere, a rail or a triangle pins the player: the box rests
+  // exactly tangent to the shape, so every step registers as a collision and
+  // the bot cannot walk to a better spot. Hopping works, though — you're free
+  // to move in mid-air — so a little hop towards the middle is the way out of
+  // a spot no jump works from. It's an ordinary jump whose target is the
+  // platform we're already on.
+  function hopTowards(me, p) {
+    var c = livePos(p);
+    var d = Math.hypot(c.x - me.x, c.z - me.z);
+    if (d < 0.05) return false;
+    B.S.target = B.S.step;
+    J.angle = faceAngle(me, { x: c.x, z: c.z });
+    J.tJump = performance.now();
+    J.estMs = Math.min(Math.round(d / SPEED), 9) * TICK_MS;
+    J.hops++;
+    B.S.hops++;
+    B.S.jumps++;
+    B.S.mode = 'air';
+    return true;
+  }
+
   function enterWalk(i) {
     B.S.step = i; B.S.mode = 'walk'; resetApproach();
     J.walkT = performance.now();
     J.plan = null;
+    J.hops = 0;
+  }
+
+  // What actually happened to the last few failed jumps, which is the first
+  // thing worth knowing when the bot gets stuck on one step.
+  function noteLanding(target, landed) {
+    B.S.landings.push('aimed at ' + target + ', ended on ' + landed);
+    if (B.S.landings.length > 6) B.S.landings.shift();
   }
 
   function failStep(landedIdx) {
@@ -586,6 +681,18 @@
   }
 
   function tick() {
+    try {
+      tickInner();
+    } catch (err) {
+      // A throw in here used to leave the bot standing still with no clue why,
+      // which is a miserable thing to debug. Record it and stop.
+      B.S.error = String(err && err.message || err);
+      if (AP.log) AP.log('autoplay error: ' + B.S.error);
+      finish(false, 'error');
+    }
+  }
+
+  function tickInner() {
     if (!B.running) return;
     var S = B.S;
     var me = B.players[B.myId];
@@ -712,7 +819,7 @@
         // we landed, don't move at all.
         var nxtNow = B.path[S.step + 1];
         if (nxtNow && !nxtNow.special && !p.special &&
-            simulateJump(me, faceAngle(me, { x: nxtNow.x, z: nxtNow.z }), nxtNow.__oi, B.cfg.lagTicks) > 0) {
+            evaluateJump(me, faceAngle(me, { x: nxtNow.x, z: nxtNow.z }), B.cfg.lagTicks, S.step + 1)) {
           idle();
           S.mode = 'prejump';
           J.waitT = performance.now();
@@ -767,18 +874,19 @@
           finish(true, 'top');
           return;
         }
+
         // A jump's horizontal reach isn't a choice: for a given height
         // difference the arc lands at exactly one distance. Against a static
-        // platform that distance is what the generator laid the tower out
-        // with, so jump as soon as we're centred. Anything involving a moving
-        // platform has to be timed instead - aim at where the platform will be
-        // when the arc comes down, and wait for the moment that lands the
-        // right distance away.
-        var n = airTicks(standY(nxt) - me.y);
+        // platform that distance is what the generator laid the tower out with,
+        // so aim at it and go. Anything involving a moving platform has to be
+        // timed instead, which planTakeoff works out.
+        //
+        // Either way the arc is simulated from where the bot is actually
+        // standing, and any landing that gets it further up the climb counts —
+        // a jump that carries two platforms at once used to be thrown away,
+        // and from an awkward spot it is sometimes the only one that works.
         var timed = nxt.special === 'moving' || (cur && cur.special === 'moving');
-        var aim = { x: nxt.x, z: nxt.z };
-        var flightTicks = n;
-
+        var flightTicks = airTicks(standY(nxt) - me.y);
         var jAim;
 
         if (timed) {
@@ -786,13 +894,26 @@
           // we picked. Walking now would invalidate the plan, which assumes we
           // keep whatever spot on the platform we already have.
           if (!J.plan) {
-            J.plan = planTakeoff(me, cur, nxt);
+            J.plan = planTakeoff(me, cur, nxt, S.step + 1);
             J.planAt = performance.now();
             if (!J.plan) {
-              // A whole cycle of take-off moments, none of which land: that
-              // platform cannot be reached from where we are standing.
+              // Nothing lands from this exact spot. Before giving up, stand
+              // somewhere else on the platform and ask again — where you stand
+              // changes the whole arc, and an inch off centre can have no
+              // window at all when the middle has plenty.
+              var cc = cur ? livePos(cur) : null;
+              if (cc && !J.triedCentre && Math.hypot(me.x - cc.x, me.z - cc.z) > 0.12) {
+                if (approach(me, { x: cc.x, z: cc.z }, 0.12)) { J.triedCentre = true; idle(); }
+                return;
+              }
+              // Pinned somewhere no arc works from? Hop to the middle first.
+              if (J.hops < 2 && cur && hopTowards(me, cur)) return;
+
+              // A whole cycle of moments from the middle too: that platform
+              // genuinely cannot be reached from here.
               S.target = S.step + 1;
               S.noWindow = S.step + 1;
+              J.triedCentre = false;
               failStep(standingIndex(me));
               return;
             }
@@ -801,64 +922,88 @@
           var dueAt = J.planAt + J.plan.at * TICK_MS;
           var now = performance.now();
           if (now < dueAt - 4 * TICK_MS || !aligned(J.plan.angle)) {
-            send(false, false, J.plan.angle);                       // turn, and wait for it
+            send(false, false, J.plan.angle);           // turn, and wait for it
             return;
           }
 
-          // The moment is here, so stop trusting the schedule and check the
-          // arc against the state that just arrived: a tick of clock drift or
-          // an extra hop of latency is the difference between landing on a
-          // moving platform and landing where it used to be.
-          var land = simulateJump(me, J.plan.angle, nxt.__oi, B.cfg.lagTicks);
-          if (land < 0) {
-            if (now > dueAt + 400) J.plan = null;                   // moment gone; plan again
+          // The moment is here, so stop trusting the schedule and check the arc
+          // against the state that just arrived: a tick of clock drift or an
+          // extra hop of latency is the difference between landing on a moving
+          // platform and landing where it used to be. Nudge a tick or a couple
+          // of degrees rather than insisting on the instant that was planned.
+          var landing = null;
+          var laterBy = 0;
+          for (var dt = 0; dt <= 3 && !landing && !laterBy; dt++) {
+            var hit = bestJump(me, J.plan.angle, FIRE_FAN, B.cfg.lagTicks + dt, S.step + 1);
+            if (!hit) continue;
+            J.plan.angle = hit.angle;
+            if (dt === 0) landing = hit;
+            else laterBy = dt;
+          }
+
+          if (!landing) {
+            // The arc works a tick or two from now rather than this instant, so
+            // wait for it — but only ever a few ticks in total. Pushing the
+            // moment back every tick moves the deadline away faster than time
+            // arrives at it, and the bot waits forever without jumping.
+            if (laterBy && J.deferred < 6) {
+              J.deferred += laterBy;
+              J.plan.at += laterBy;
+              S.defers++;
+              send(false, false, J.plan.angle);
+              return;
+            }
+            if (now > dueAt + 400) {                    // moment gone; plan a new one
+              J.plan = null;
+              J.deferred = 0;
+              J.triedCentre = false;
+              S.replans++;
+            }
             send(false, false, J.plan ? J.plan.angle : angOut);
             return;
           }
+          J.deferred = 0;
 
           jAim = J.plan.angle;
-          flightTicks = land;
+          flightTicks = landing.ticks;
+          S.target = landing.step;
           J.plan = null;
+          J.triedCentre = false;
         } else {
-          jAim = faceAngle(me, aim);
-          if (!aligned(jAim)) { send(false, false, jAim); return; }  // finish turning first
+          // Pick the heading first, then turn to it. Checking alignment against
+          // the straight-at-the-platform heading and then jumping on a slightly
+          // different one means turning back and forth between the two every
+          // tick and never taking off at all.
+          var base = faceAngle(me, { x: nxt.x, z: nxt.z });
+          var ok = bestJump(me, base, AIM_FAN, B.cfg.lagTicks, S.step + 1);
 
-          // Aiming at the platform's centre is what the tower was laid out
-          // with, but only from *its* centre - and we land where we land, not
-          // always dead centre. Check the jump from where we are actually
-          // standing and nudge the heading if the arc misses, which is most of
-          // what used to make the bot fall.
-          var ok = simulateJump(me, jAim, nxt.__oi, B.cfg.lagTicks);
-          if (ok < 0) {
-            for (var fi = 1; fi < AIM_FAN.length && ok < 0; fi++) {
-              var alt = jAim + AIM_FAN[fi];
-              var hit = simulateJump(me, alt, nxt.__oi, B.cfg.lagTicks);
-              if (hit > 0) { jAim = alt; ok = hit; }
-            }
-          }
-          if (ok < 0) {
+          if (!ok) {
             // Nothing lands from this spot: shuffle towards the middle of the
             // platform and try from there rather than jumping into thin air.
-            var p2 = B.path[S.step];
-            var c2 = p2 ? livePos(p2) : null;
+            var c2 = cur ? livePos(cur) : null;
             if (performance.now() - J.waitT < 2500 && c2 &&
                 Math.hypot(me.x - c2.x, me.z - c2.z) > 0.12) {
               if (approach(me, { x: c2.x, z: c2.z }, 0.12)) idle();
               return;
             }
-            // Still nothing from the middle: count it as a failed attempt and
-            // let the retry come at it fresh. Jumping anyway just throws the
-            // bot off the tower and burns the same attempt.
+            // Can't walk any closer — hop towards the middle and try again.
+            if (J.hops < 2 && cur && hopTowards(me, cur)) return;
+
+            // Still nothing: count it as a failed attempt and let the retry
+            // come at it fresh. Jumping anyway just throws the bot off the
+            // tower and burns the same attempt.
             idle();
             S.target = S.step + 1;
             failStep(S.step);
             return;
           }
-          flightTicks = ok;
+
+          jAim = ok.angle;
+          flightTicks = ok.ticks;
+          S.target = ok.step;                          // may skip a platform
           if (!aligned(jAim)) { send(false, false, jAim); return; }
         }
 
-        S.target = S.step + 1;
         J.angle = jAim;
         J.tJump = performance.now();
         J.estMs = flightTicks * TICK_MS;
@@ -872,6 +1017,9 @@
       // edge of a 1-unit platform.
       case 'air': {
         var el = performance.now() - J.tJump;
+        // Held a couple of ticks past the simulated landing tick: letting go
+        // exactly on it lands short, because the state the estimate was made
+        // from is already a tick or two old by the time the arc starts.
         var holdW = el < J.estMs + 40;
         send(holdW, el < 70, J.angle);
 
@@ -884,11 +1032,12 @@
               enterWalk(idx);
               progress('reached platform ' + idx + ' of ' + (B.path.length - 1));
             } else {
+              noteLanding(S.target, idx);
               failStep(idx);
             }
             return;
           }
-          if (onFloor(me)) { idle(); failStep(-1); return; }
+          if (onFloor(me)) { idle(); noteLanding(S.target, 'the floor'); failStep(-1); return; }
         }
         if (el > 9000) { idle(); failStep(standingIndex(me)); }
         return;
@@ -926,16 +1075,19 @@
 
   // Exposed for diagnostics: the local physics and the take-off search.
   AP.simJump = function (pos, ang, oi, t0) { return simulateJump(pos, ang, oi, t0); };
-  AP.planJump = function (me, cur, nxt) { return planTakeoff(me, cur, nxt); };
+  AP.simJumpTo = function (pos, ang, t0) { return simulateJumpTo(pos, ang, t0); };
+  AP.evalJump = function (pos, ang, t0, minStep) { return evaluateJump(pos, ang, t0, minStep); };
+  AP.planJump = function (me, cur, nxt, minStep) { return planTakeoff(me, cur, nxt, minStep || 0); };
 
   AP.dbg = function () { return { ang: curAng, appr: appr, J: J, cfg: B.cfg }; };
 
   AP.status = function () {
     var S = B.S;
     return {
-      mode: S.mode, step: S.step, target: S.target, steps: B.path.length - 1,
+      mode: S.mode, step: S.step, target: S.target, steps: B.path.length - 1, error: S.error,
       y: S.y, maxY: S.maxY, done: S.done, ok: S.ok, reason: S.reason, note: S.note,
       jumps: S.jumps, falls: S.falls, voids: S.voids, fails: S.fails,
+      defers: S.defers, replans: S.replans, hops: S.hops, landings: S.landings,
       stuckAt: S.stuckAt, noWindow: S.noWindow, ghost: S.ghost,
       phase: B.phase, roomKind: B.roomKind, roomId: B.roomId, myId: B.myId,
       pathLen: B.path.length, stateCount: B.stateCount, lavaY: B.lavaY,

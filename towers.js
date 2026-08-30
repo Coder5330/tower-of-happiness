@@ -3,7 +3,6 @@ const path = require('path');
 const { TOWER_HEIGHT, GROUND_AREA, PLAYER_SIZE, JUMP_VELOCITY, GRAVITY, TERMINAL_VELOCITY, PLAYER_SPEED } = require('./levels');
 const { buildObjects, createPlayer, resolveMovement, applyPendingMove, advanceMovingPlatforms } = require('./physics');
 
-// Deterministic PRNG so the same tower id always regenerates the same layout.
 function mulberry32(seed) {
     let s = seed | 0;
     return function () {
@@ -46,10 +45,6 @@ function towardCenter(from) {
     return { x: -from.x / d, z: -from.z / d };
 }
 
-// Near a wall, only a narrow slice of directions has room to clamp-free
-// land; picking a fully random angle there mostly produces truncated,
-// unreachable candidates. Once `from` is close enough to the boundary, bias
-// the angle toward the center instead of sampling uniformly.
 function biasedAngle(rand, from, margin) {
     const edgeDist = margin - Math.max(Math.abs(from.x), Math.abs(from.z));
     if (edgeDist > margin * 0.35) return rand() * Math.PI * 2;
@@ -57,18 +52,6 @@ function biasedAngle(rand, from, margin) {
     const centerAngle = Math.atan2(center.z, center.x);
     return centerAngle + (rand() * 2 - 1) * Math.PI * 0.55;
 }
-
-// --- Real-physics jump verification ---
-// Distance/height heuristics alone can't catch every failure mode — e.g. a
-// long rail-shaped platform can act as a "ceiling" that blocks the rising
-// half of a jump before the player clears it horizontally, even when the raw
-// distance and height are individually well within jump range, and a
-// platform verified safe against everything placed *before* it can still get
-// boxed in by something placed *after* it nearby. So every jump is simulated
-// against the real physics engine (the same resolveMovement/applyPendingMove
-// the game itself runs) against the tower's *final* geometry, and any jump
-// that doesn't actually land gets its platform regenerated and re-checked
-// until the whole climb verifiably works.
 
 function topY(p) {
     if (p.shape === 'sphere' || p.shape === 'cylinder') return p.y + p.radius;
@@ -92,18 +75,11 @@ function simulateJump(objects, from, to, maxTicks) {
         advanceMovingPlatforms(objects);
         resolveMovement(player, objects, keys, []);
         applyPendingMove(player, objects);
-        if (player.dead) return false; // hit a hazard
+        if (player.dead) return false;
         if (!player.on_ground) everAirborne = true;
-        // A real jump leaves the ground almost immediately — if it hasn't by
-        // now, something (usually a ceiling) blocked it outright; stop early
-        // instead of burning the rest of the tick budget.
         if (t === 5 && !everAirborne) return false;
 
         const dxNow = player.position.x - to.x, dzNow = player.position.z - to.z;
-        // player.position.y is the player's *center*, which sits half its
-        // height above the surface it's standing on — compare against that,
-        // not the bare platform surface height, or a perfect landing never
-        // registers as "on target".
         const onTarget = Math.hypot(dxNow, dzNow) < 1.1 && Math.abs(player.position.y - (topY(to) + PLAYER_SIZE.height / 2)) < 0.6;
         if (player.on_ground && onTarget) {
             landedTicks++;
@@ -112,7 +88,7 @@ function simulateJump(objects, from, to, maxTicks) {
             landedTicks = 0;
         }
 
-        if (player.position.y < Math.min(topY(from), topY(to)) - 15) return false; // fell through
+        if (player.position.y < Math.min(topY(from), topY(to)) - 15) return false;
     }
     return false;
 }
@@ -133,14 +109,6 @@ function simulateRide(objects, movingPlatform, maxTicks) {
     return false;
 }
 
-// A jump's horizontal reach isn't a free choice independent of how high it
-// rises — the arc only crosses back down through a given height `dy` at one
-// specific horizontal distance (for a fixed forward speed and jump impulse).
-// Landing anywhere but at (approximately) that distance means the platform
-// is either still ahead of the player when they've already fallen past its
-// height, or already behind them. So candidate distances are derived from
-// the actual per-tick vertical physics (mirroring resolveMovement exactly),
-// not picked independently at random.
 function jumpDescentDist(dy) {
     let yv = JUMP_VELOCITY;
     let y = 0;
@@ -154,37 +122,24 @@ function jumpDescentDist(dy) {
     }
     return ticks * PLAYER_SPEED;
 }
-// Small random slack around the physically-correct distance, kept well
-// inside simulateJump's landing tolerance so it doesn't itself cause misses.
 const JUMP_DIST_JITTER = 0.2;
 const JUMP_DY_MIN = 0.7, JUMP_DY_MAX = 1.8;
 const RIDE_DIST_MIN = 3, RIDE_DIST_MAX = 6;
-// A jump that clamps to near-zero horizontal distance (pinned against a wall)
-// is unreachable in this engine — the target ends up directly overhead, and
-// the player clips its underside before ever getting horizontal clearance to
-// land on top.
 const MIN_EFFECTIVE_DIST = 0.8;
 const RANDOM_ATTEMPTS = 12;
-// Platforms packed too close together (even if each individual jump verifies)
-// tend to box each other in — a long random walk with capped step sizes can
-// otherwise get stuck oscillating in one small column. Reject candidates that
-// land too near any *other* existing platform in a similar height band.
 const CLUTTER_MIN_DIST = 2.5;
 const CLUTTER_Y_BAND = 2.5;
 
 function isTooCluttered(x, y, z, from, otherEntries, minDist = CLUTTER_MIN_DIST) {
     for (const o of otherEntries) {
         if (o === from) continue;
-        if ((o.width && o.width > 10) || (o.depth && o.depth > 10)) continue; // walls
+        if ((o.width && o.width > 10) || (o.depth && o.depth > 10)) continue;
         if (Math.abs(o.y - y) > CLUTTER_Y_BAND) continue;
         if (Math.hypot(o.x - x, o.z - z) < minDist) return true;
     }
     return false;
 }
 
-// A moving platform's ride can be obstructed by something sitting anywhere
-// along its travel line, not just at the two endpoints — sample a handful of
-// points between start and end and clutter-check each.
 function isRideObstructed(startPos, endPos, from, otherEntries) {
     const SAMPLES = 4;
     for (let s = 1; s <= SAMPLES; s++) {
@@ -207,10 +162,6 @@ function shapedPlatform(rand, x, y, z) {
     return p;
 }
 
-// Random dist/angle/dy candidates first, then a handful of short verified
-// hops toward the tower's center (which always has room to move into) if
-// nothing else lands — checked against `otherObjects`, the *rest* of the
-// tower's geometry, so this is valid regardless of generation order.
 function pickJumpTarget(rand, margin, from, otherObjects) {
     for (let attempt = 0; attempt < RANDOM_ATTEMPTS; attempt++) {
         const angle = biasedAngle(rand, from, margin);
@@ -224,10 +175,6 @@ function pickJumpTarget(rand, margin, from, otherObjects) {
         if (simulateJump(buildObjects(otherObjects.concat([candidate])), from, candidate, 45)) return candidate;
     }
 
-    // Exhaustive, still-verified fallback: every 22.5-degree direction crossed
-    // with a spread of dy levels (each with its physically-correct distance).
-    // Unlike the random phase above, nothing here is left unverified — a
-    // candidate is only ever returned once simulateJump confirms it lands.
     const center = towardCenter(from);
     const dirs = [];
     for (let k = 0; k < 16; k++) dirs.push(rotate(center, (k * Math.PI) / 8));
@@ -243,12 +190,6 @@ function pickJumpTarget(rand, margin, from, otherObjects) {
             if (simulateJump(buildObjects(otherObjects.concat([candidate])), from, candidate, 60)) return candidate;
         }
     }
-    // Last resort before giving up: the same physics-verified search with the
-    // spacing rule relaxed and a wider landing pad. Cramped, yes - but every
-    // candidate returned here still had its jump simulated and landed.
-    // Nothing unverified is ever returned: a caller that gets null repairs the
-    // platform this jump starts from instead, which is the actual problem when
-    // a take-off point is boxed in.
     const fineDirs = [];
     for (let k = 0; k < 16; k++) fineDirs.push(rotate(center, (k * Math.PI) / 8));
     const fineDys = [0.9, 1.1, 1.3, 1.5, 0.8, 1.7];
@@ -295,13 +236,9 @@ function pickMovingTarget(rand, margin, from, otherObjects) {
         if (!simulateRide(objects, candidate, 120)) continue;
         return candidate;
     }
-    return null; // caller falls back to a regular jump instead
+    return null;
 }
 
-// The summit slab, verified like every other landing. It has to stay high
-// enough to count as a win (WIN_HEIGHT is TOWER_HEIGHT - 3, measured at the
-// player's centre) and wide enough to still read as the top of the tower, so
-// the search is over direction and take-off height rather than position.
 function pickSummit(rand, margin, from, otherObjects) {
     const dirs = [];
     for (let k = 0; k < 16; k++) dirs.push(rotate(towardCenter(from), (k * Math.PI) / 8));
@@ -322,20 +259,6 @@ function pickSummit(rand, margin, from, otherObjects) {
     return null;
 }
 
-// Builds the climb one verified jump at a time: each platform is only kept
-// once simulateJump lands on it against the geometry that exists so far. When
-// a take-off point turns out to be boxed in - no landing spot anywhere around
-// it - the platform the player would be standing on is removed and re-rolled,
-// so the walk backs out of dead ends instead of building through them.
-//
-// This replaced a blind random walk that placed the whole path unverified and
-// left the repair sweep to fix nearly every step, which it couldn't do without
-// each fix invalidating the last.
-// A jump verified when it was placed can still be ruined by a platform added
-// above it later - an arc rises 2.6, which is two or three steps' worth of
-// climb, so anything within a few platforms can end up overhanging it. Every
-// candidate is therefore checked against the jumps just below it as well as
-// its own, which is what stops the tower from having to be unpicked afterwards.
 const GUARD_STEPS = 4;
 
 function breaksJumpsBelow(path, hazards, candidate) {
@@ -361,8 +284,6 @@ function growPath(rand, margin) {
         const others = geometry();
         const roll = rand();
 
-        // Decorative hazard off to the side. It goes into the geometry, so
-        // every jump from here on is verified with it in place.
         if (roll < 0.15 && path.length > 3) {
             const angle = biasedAngle(rand, from, margin);
             const dist = 1.5 + rand();
@@ -386,7 +307,6 @@ function growPath(rand, margin) {
 
         if (next) { path.push(next); continue; }
 
-        // Nowhere to go from here: undo the platform we are standing on.
         if (path.length > 1 && backtracks++ < MAX_BACKTRACKS) path.pop();
         else return null;
     }
@@ -396,33 +316,23 @@ function growPath(rand, margin) {
         const summit = pickSummit(rand, margin, takeoffPoint(last), geometry());
         if (summit && !breaksJumpsBelow(path, hazards, summit)) { path.push(summit); return { path, hazards }; }
         if (path.length <= 2 || backtracks++ >= MAX_BACKTRACKS) return null;
-        path.pop();                                    // no summit from there either
+        path.pop();
     }
 }
 
-// Where a player stands right before attempting the jump to path[i] — the
-// platform itself for a regular stop, or wherever the ride drops them off.
 function takeoffPoint(prevEntry) {
     if (prevEntry.special === 'moving') return { x: prevEntry.endPos.x, y: prevEntry.y, z: prevEntry.endPos.z };
     return prevEntry;
 }
 
-// One step of the climb, checked against the tower's *final* geometry - every
-// platform, not just the ones placed before it. Budgets are deliberately
-// tighter than the shipping check in towerFailures(), so anything that passes
-// here passes there too.
 function stepVerifies(path, hazards, i) {
     const to = path[i];
     const from = takeoffPoint(path[i - 1]);
-    // simulateJump/simulateRide advance moving platforms in place, so each
-    // check needs its own freshly built world, starting at rest like the game.
     if (!simulateJump(buildObjects(walls().concat(path, hazards)), from, to, 80)) return false;
     if (to.special === 'moving' && !simulateRide(buildObjects(walls().concat(path, hazards)), to, 140)) return false;
     return true;
 }
 
-// Re-roll platform `i`, verified against everything else in the tower. Returns
-// false when nothing lands from that take-off point at all.
 function regeneratePlatform(rand, margin, path, hazards, i) {
     if (i < 1 || i >= path.length) return false;
 
@@ -440,20 +350,9 @@ function regeneratePlatform(rand, margin, path, hazards, i) {
     return true;
 }
 
-// Sweeps the climb until a whole pass changes nothing - at which point every
-// jump verified against geometry that then stayed put, so the tower is
-// consistent as a whole rather than step by step.
-//
-// When a step keeps failing, the platform being jumped *to* usually isn't the
-// problem: the one it has to jump *from* is boxed in, and no landing spot
-// exists from there. So repairs escalate backwards down the climb, re-rolling
-// earlier platforms until the step becomes reachable.
 function repairPath(rand, margin, path, hazards) {
     const MAX_PASSES = 15;
     const MAX_REPAIRS_PER_STEP = 6;
-    // A layout that needs more than a few seconds of repair is a dead end;
-    // generateTower re-rolls it from a fresh seed, which is cheaper than
-    // fighting it.
     const deadline = Date.now() + REPAIR_BUDGET_MS;
     const tries = new Map();
 
@@ -470,13 +369,10 @@ function repairPath(rand, margin, path, hazards) {
                 const n = (tries.get(i) || 0) + 1;
                 tries.set(i, n);
 
-                // First few goes: re-roll this platform. After that, walk the
-                // repair backwards - one platform further down each time.
                 let target = i;
                 if (n > 3) target = Math.max(1, i - 1 - ((n - 4) % 3));
 
                 if (!regeneratePlatform(rand, margin, path, hazards, target) && target > 1) {
-                    // Nothing lands from there either - go back further still.
                     regeneratePlatform(rand, margin, path, hazards, target - 1);
                 }
             }
@@ -484,15 +380,9 @@ function repairPath(rand, margin, path, hazards) {
 
         if (!anyRepaired) return path;
     }
-    return path;                                       // caller re-rolls the whole tower
+    return path;
 }
 
-// Kill hazards are solid obstacles to the physics engine, not just
-// touch-triggers (resolveMovement collides against every object, including
-// `special: 'kill'` ones) — so an unchecked hazard placed near a climbing
-// platform can silently trap or block a jump exactly like a "ceiling" would.
-// Hazards are decorative and never load-bearing, so any that ended up too
-// close to the actual climbing path are simply dropped rather than repaired.
 const HAZARD_CLEARANCE = 1.6;
 const HAZARD_Y_BAND = 2.0;
 function sanitizeHazards(path, hazards) {
@@ -501,9 +391,6 @@ function sanitizeHazards(path, hazards) {
     ));
 }
 
-// The shipping check: exactly what verify-towers.js asserts, so a tower can
-// never be generated to one standard and tested against another. Returns the
-// jumps (and rides) that don't actually work.
 function towerFailures(levelData) {
     const climbable = levelData.slice(4).filter((p) => p.special !== 'kill');
     const failures = [];
@@ -525,18 +412,12 @@ function buildOneTower(seed) {
     const rand = mulberry32(seed);
     const margin = GROUND_AREA / 2 - 2;
     const grown = growPath(rand, margin);
-    if (!grown) return null;                           // dead-ended; caller re-rolls
+    if (!grown) return null;
     const hazards = sanitizeHazards(grown.path, grown.hazards);
-    // Every jump was verified as it was placed, but a platform added later can
-    // still overhang an earlier one, so the whole climb gets swept again.
     const fixedPath = repairPath(rand, margin, grown.path, hazards);
     return walls().concat(fixedPath, hazards);
 }
 
-// A tower is only ever shipped once every one of its jumps has been simulated
-// on the finished geometry. If the repair sweep can't reach that, the layout
-// itself was a dead end - re-roll the whole tower from a derived seed rather
-// than hand players a climb with a wall in it.
 const MAX_TOWER_ATTEMPTS = 6;
 const REPAIR_BUDGET_MS = 4000;
 
@@ -554,14 +435,6 @@ function generateTower(seed) {
     return best ? best.level : buildOneTower(seed) || walls();
 }
 
-// Bump TOWER_SEED (or this default) to roll a completely new set of 12 towers.
-// Keep it fixed once deployed: the seed is the only thing standing between a
-// stable pool and a different tower under everyone's feet on the next deploy.
-//
-// Any value gives a fully climbable pool - generateTower re-rolls a tower until
-// every one of its jumps has been simulated on the finished geometry - so this
-// is purely a choice of which 12 towers you want. Run `node verify-towers.js`
-// after changing it anyway; that is the check the generator holds itself to.
 const SEED_SALT = process.env.TOWER_SEED !== undefined ? Number(process.env.TOWER_SEED) : 271828;
 
 const TOWER_POOL = Array.from({ length: 12 }, (_, i) => ({
@@ -570,16 +443,6 @@ const TOWER_POOL = Array.from({ length: 12 }, (_, i) => ({
 
 const towerLevelCache = new Map();
 
-// Towers are generated from a seed, but generating the pool takes tens of
-// seconds — every jump in every tower gets simulated — which is far too long to
-// do while a deploy is trying to answer its first request. So the pool is baked
-// into towers.json (run `npm run towers`) and simply loaded here. The file is
-// plain data, one platform per line, and is meant to be hand-editable: tweak a
-// platform, run `npm run verify` to check the climb still works.
-//
-// If the file is missing, or was built from a different seed, towers are
-// generated on demand instead and the server still works — just slower to warm
-// up. TOWERS_REBUILD=1 ignores the file entirely, which is how it's rebuilt.
 function loadBakedTowers() {
     if (process.env.TOWERS_REBUILD) return 0;
     let raw;
@@ -608,12 +471,6 @@ function buildTowerLevel(towerId) {
     return lvl;
 }
 
-// Towers are cached once built, and generating the pool takes long enough
-// (tens of seconds — every jump in every tower gets simulated) that doing it
-// before the server binds its port leaves deploys serving nothing at all.
-// So the caller starts the server first and warms the pool afterwards, a
-// tower at a time, yielding between each so requests are served throughout.
-// Anything that asks for a tower before its turn just builds it on demand.
 const bakedCount = loadBakedTowers();
 if (bakedCount) console.log(`Loaded ${bakedCount} towers from towers.json`);
 
@@ -630,10 +487,6 @@ function warmTowerPool(onDone) {
     })();
 }
 
-// Tower geometry is seeded, so the pool is byte-identical on every deploy; the
-// only thing that varies between rooms is which of the 12 gets picked. Set
-// TOWER_ID to pin every new room to one of them (useful for testing, or for
-// running an event on a known tower).
 const FIXED_TOWER_ID = Number(process.env.TOWER_ID) || null;
 
 function randomTowerId() {

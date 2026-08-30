@@ -133,6 +133,7 @@ function createRoom({ id, kind, name, permanent, maxPlayers, towerId, hostWs }) 
         roundEndAt: null,
         pendingChoice: null,
         pendingJoins: new Map(),
+        createdAt: Date.now(),
         tickCount: 0,
     };
 }
@@ -172,10 +173,46 @@ function createPracticeRoom(towerId) {
 // 'main'-kind rooms (Main Game and every custom room) never get deleted when
 // empty — they just reset, so a room you made sticks around for next time.
 // Practice rooms are private and single-player, so an empty one just vanishes.
+// An empty room closes. Only the fixed Main Game is permanent — it drops back
+// to its lobby instead, so there is always somewhere to join. Player-made rooms
+// used to linger empty forever, which just filled the room list with junk.
 function handleRoomEmpty(room) {
     if (room.players.size > 0) return;
-    if (room.kind === 'main') resetToLobby(room);
-    else rooms.delete(room.id);
+
+    if (room.permanent) {
+        resetToLobby(room);
+        return;
+    }
+
+    // Anyone still waiting on the host to approve them is waiting for a room
+    // that no longer exists.
+    for (const pending of room.pendingJoins.values()) {
+        if (pending.ws.readyState === pending.ws.OPEN) {
+            pending.ws.send(JSON.stringify({ type: 'join_error', reason: 'closed', roomId: room.id }));
+        }
+        const pendingConn = connections.get(pending.ws);
+        if (pendingConn) { pendingConn.pendingRoom = null; pendingConn.pendingRequestId = null; }
+    }
+    room.pendingJoins.clear();
+    rooms.delete(room.id);
+}
+
+// A room can also end up empty without anyone having left it: creating a room
+// and never joining (the browser creates it, then joins on the reply) leaves
+// one behind if that second step never arrives. Anything player-made that has
+// sat empty since it was created gets swept up.
+const EMPTY_ROOM_GRACE_MS = 15000;
+
+function sweepEmptyRooms() {
+    const now = Date.now();
+    let closed = false;
+    for (const room of rooms.values()) {
+        if (room.permanent || room.players.size > 0) continue;
+        if (now - room.createdAt < EMPTY_ROOM_GRACE_MS) continue;
+        handleRoomEmpty(room);
+        closed = true;
+    }
+    if (closed) broadcastRoomsSnapshot();
 }
 
 function roomSummary(room) {
@@ -997,9 +1034,9 @@ wss.on('connection', (ws, req) => {
         if (room.hostWs === ws) {
             // Host disconnected — deny anyone still waiting on approval rather
             // than leaving them stuck forever, and clear the host slot so the
-            // room doesn't become permanently unjoinable (custom rooms persist
-            // when empty now, instead of being deleted). The next player to
-            // join an unhosted room automatically becomes its new host.
+            // room doesn't become unjoinable if other players are still in it.
+            // The next player to join an unhosted room becomes its new host;
+            // if nobody is left, handleRoomEmpty closes the room outright.
             for (const pending of room.pendingJoins.values()) {
                 if (pending.ws.readyState === pending.ws.OPEN) {
                     pending.ws.send(JSON.stringify({ type: 'join_error', reason: 'host_left', roomId: room.id }));
@@ -1028,3 +1065,5 @@ setInterval(() => {
         accumulator -= TICK_MS;
     }
 }, TICK_MS);
+
+setInterval(sweepEmptyRooms, 5000);

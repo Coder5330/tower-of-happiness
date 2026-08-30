@@ -793,6 +793,7 @@ function connect() {
             if (msg.reason === 'full') alert('That room is full (8/8 players).');
             else if (msg.reason === 'denied') alert('The host denied your request to join.');
             else if (msg.reason === 'host_left') alert('The host left before approving your request.');
+            else if (msg.reason === 'closed') alert('That room closed — everyone left it.');
 
         } else if (msg.type === 'welcome') {
             myId = msg.id;
