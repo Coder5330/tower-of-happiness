@@ -558,6 +558,9 @@ function connect() {
             joinPendingNoteEl.classList.add('hidden');
             loadLevel(msg.level);
             ensurePlayerMesh(myId);
+            let savedAdminToken = null;
+            try { savedAdminToken = localStorage.getItem('adminToken'); } catch {}
+            if (savedAdminToken) ws.send(JSON.stringify({ type: 'admin_token_auth', token: savedAdminToken }));
             updateLobbyVisibility(null);
             if (myIsHost && myRoomKind === 'main') {
                 renderHostTowerSelect();
@@ -637,8 +640,11 @@ function connect() {
             if (msg.ok) {
                 adminAuthed = true;
                 adminPanelEl.classList.remove('hidden');
-                logToConsole('authenticated — admin panel unlocked');
-            } else {
+                if (msg.token) {
+                    try { localStorage.setItem('adminToken', msg.token); } catch {}
+                }
+                if (!msg.silent) logToConsole('authenticated — admin panel unlocked');
+            } else if (!msg.silent) {
                 logToConsole(msg.locked ? 'too many failed attempts — locked out temporarily' : 'incorrect code');
             }
 
@@ -785,11 +791,18 @@ function handleConsoleCommand(text) {
         case 'teleport':
             sendAdminCmd('teleport', null, rest[0]);
             break;
-        case 'logout':
+        case 'logout': {
             adminAuthed = false;
             adminPanelEl.classList.add('hidden');
+            let storedToken = null;
+            try {
+                storedToken = localStorage.getItem('adminToken');
+                localStorage.removeItem('adminToken');
+            } catch {}
+            ws.send(JSON.stringify({ type: 'admin_logout', token: storedToken }));
             logToConsole('logged out');
             break;
+        }
         default:
             logToConsole('unknown command — type: help');
     }
