@@ -458,23 +458,49 @@ function removeJoinRequest(requestId) {
     if (!pendingJoinRequestEls.size) joinRequestsPanelEl.classList.add('hidden');
 }
 
-function showTowerChoice(msg) {
-    if (msg.chooserId === myId) {
-        towerChoiceOptionsEl.innerHTML = '';
-        for (const choice of msg.choices) {
-            const btn = document.createElement('button');
-            btn.textContent = choice.name;
+// Everyone who reached the top votes on the next tower, and finishing sooner
+// carries more weight: three votes for first, two for second, one for the rest.
+let voteChoices = [];
+let voteTally = {};
+let myVoteWeight = 0;
+
+function renderVote() {
+    towerChoiceOptionsEl.innerHTML = '';
+    for (const choice of voteChoices) {
+        const btn = document.createElement('button');
+        const votes = voteTally[choice.id] || 0;
+        btn.textContent = votes ? `${choice.name} — ${votes}` : choice.name;
+        btn.disabled = !myVoteWeight;
+        if (myVoteWeight) {
             btn.addEventListener('click', () => {
-                ws.send(JSON.stringify({ type: 'choose_next_tower', towerId: choice.id }));
-                towerChoiceModalEl.classList.add('hidden');
+                ws.send(JSON.stringify({ type: 'vote_tower', towerId: choice.id }));
+                towerChoiceWaitingNoteEl.textContent = 'Vote cast — waiting for the others…';
+                towerChoiceWaitingNoteEl.classList.remove('hidden');
             });
-            towerChoiceOptionsEl.appendChild(btn);
         }
-        towerChoiceModalEl.classList.remove('hidden');
-    } else {
-        towerChoiceWaitingNoteEl.textContent = `Player ${msg.chooserId} is picking the next tower…`;
-        towerChoiceWaitingNoteEl.classList.remove('hidden');
+        towerChoiceOptionsEl.appendChild(btn);
     }
+}
+
+function showTowerVote(msg) {
+    voteChoices = msg.choices;
+    voteTally = {};
+    myVoteWeight = (msg.weights && msg.weights[myId]) || 0;
+
+    renderVote();
+    towerChoiceModalEl.classList.remove('hidden');
+
+    const voters = Object.keys(msg.weights || {}).length;
+    if (myVoteWeight) {
+        towerChoiceWaitingNoteEl.textContent =
+            `Vote for the next tower — your vote counts ${myVoteWeight}×`;
+    } else if (voters) {
+        towerChoiceWaitingNoteEl.textContent =
+            `${voters} climber${voters === 1 ? '' : 's'} reached the top and ${voters === 1 ? 'is' : 'are'} voting…`;
+    } else {
+        towerChoiceWaitingNoteEl.textContent = 'Nobody reached the top — next tower is random';
+    }
+    towerChoiceWaitingNoteEl.classList.remove('hidden');
 }
 
 function hideTowerChoice() {
@@ -819,8 +845,23 @@ function connect() {
         } else if (msg.type === 'level') {
             loadLevel(msg.level);
 
-        } else if (msg.type === 'choose_tower') {
-            showTowerChoice(msg);
+        } else if (msg.type === 'tower_vote') {
+            showTowerVote(msg);
+
+        } else if (msg.type === 'vote_tally') {
+            voteTally = msg.tally || {};
+            renderVote();
+
+        } else if (msg.type === 'vote_result') {
+            const won = voteChoices.find((c) => c.id === msg.towerId);
+            logToConsole(`[NEXT TOWER: ${won ? won.name : msg.towerId}]`);
+
+        } else if (msg.type === 'finish') {
+            const place = ['1st', '2nd', '3rd'][msg.place - 1] || `${msg.place}th`;
+            if (msg.id === myId) showRoundBanner(`YOU REACHED THE TOP — ${place}!`);
+            logToConsole(msg.id === myId
+                ? `[YOU FINISHED ${place}]`
+                : `[PLAYER${msg.id} REACHED THE TOP — ${place}]`);
 
         } else if (msg.type === 'phase') {
             currentPhase = msg.phase;
@@ -884,8 +925,9 @@ function connect() {
             } else {
                 showRoundBanner("TIME'S UP — NO WINNER");
             }
+            const finished = (msg.finishers || []).length;
             logToConsole(msg.winner !== null
-                ? `[PLAYER${msg.winner} REACHED THE TOP AND WON THE ROUND]`
+                ? `[ROUND OVER — PLAYER${msg.winner} WON, ${finished} reached the top]`
                 : '[ROUND OVER — NOBODY REACHED THE TOP IN TIME]');
 
         } else if (msg.type === 'admin_auth_result') {

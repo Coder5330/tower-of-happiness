@@ -63,6 +63,7 @@ const BANANA_TICKS = 14;
 const BANANA_ARM_MS = 900;             // grace period before it can catch its owner
 const BANANA_COOLDOWN_MS = 500;
 const COINS_PER_WIN = 1;
+const COINS_PER_FINISH = 1;            // anyone else who reaches the top
 const COINS_FAST_WIN_BONUS = 1;        // still had a minute on the clock
 const FAST_WIN_SECONDS = 60;
 
@@ -79,6 +80,9 @@ const ROUND_DURATION_MS = 5 * 60 * 1000;
 const WIN_HEIGHT = TOWER_HEIGHT - 3; // reaching the top platform counts as the win
 const TOWER_CHOICE_MS = 15000;
 const TOWER_CHOICE_OPTIONS = 3;
+// Reaching the top earns a say in where everyone climbs next, and finishing
+// sooner earns more of one.
+const VOTE_WEIGHTS = [3, 2];           // first, second; everyone else who finished gets 1
 
 function randomBetween(min, max) {
     return min + Math.random() * (max - min);
@@ -89,7 +93,10 @@ function nextSpawnTicks() {
 }
 
 function isImmune(player) {
-    return (player.admin && player.admin.fly) || player.ghost;
+    // Players who have already topped out sit out the hazards — the round runs
+    // its full length now, and drowning someone in lava after they've finished
+    // would be a poor reward for finishing.
+    return (player.admin && player.admin.fly) || player.ghost || player.finished;
 }
 
 // --- Rooms ---
@@ -123,6 +130,7 @@ function createRoom({ id, kind, name, permanent, maxPlayers, towerId, hostWs }) 
         nextId: 1,
         freeIds: [],
         meteors: [],
+        finishers: [],
         bananas: [],
         nextBananaId: 1,
         pendingExplosions: [],
@@ -131,7 +139,7 @@ function createRoom({ id, kind, name, permanent, maxPlayers, towerId, hostWs }) 
         gimmick: { lavaY: LAVA_START_Y },
         phase: kind === 'main' ? 'waiting' : 'practice',
         roundEndAt: null,
-        pendingChoice: null,
+        pendingVote: null,
         pendingJoins: new Map(),
         createdAt: Date.now(),
         tickCount: 0,
@@ -170,8 +178,8 @@ function createPracticeRoom(towerId) {
     return room;
 }
 
-// 'main'-kind rooms (Main Game and every custom room) never get deleted when
-// empty — they just reset, so a room you made sticks around for next time.
+// Every practice room is its own private room, one player only, never listed —
+// so picking practice always gives you a tower to yourself.
 // Practice rooms are private and single-player, so an empty one just vanishes.
 // An empty room closes. Only the fixed Main Game is permanent — it drops back
 // to its lobby instead, so there is always somewhere to join. Player-made rooms
@@ -346,10 +354,12 @@ function resetToLobby(room) {
     room.gimmick.lavaY = LAVA_START_Y;
     room.meteors.length = 0;
     room.bananas.length = 0;
+    room.finishers.length = 0;
     room.roundEndAt = null;
-    room.pendingChoice = null;
+    room.pendingVote = null;
     for (const { player } of room.players.values()) {
         player.ghost = false;
+        player.finished = false;
         respawnPlayer(player);
     }
     broadcastRaw(room, { type: 'phase', phase: room.phase });
@@ -361,8 +371,10 @@ function startRound(room) {
     room.roundEndAt = Date.now() + ROUND_DURATION_MS;
     room.gimmick.lavaY = LAVA_START_Y;
     room.bananas.length = 0;
+    room.finishers.length = 0;
     for (const [id, { ws: sock, player }] of room.players.entries()) {
         player.ghost = false;
+        player.finished = false;
         // Peels and rocket fuel are per round, so nobody hoards them.
         const conn = connections.get(sock);
         player.bananasLeft = conn && conn.profile && conn.profile.items.includes('banana') ? BANANAS_PER_ROUND : 0;
@@ -375,27 +387,89 @@ function startRound(room) {
 
 // After a win, the winner gets ~15s to pick the next tower from 3 random
 // options; a timeout (or the room emptying) falls back to a random pick.
-function beginTowerChoice(room, chooserId) {
-    const choices = randomTowerChoices(TOWER_CHOICE_OPTIONS);
-    room.phase = 'choosing';
-    room.pendingChoice = { chooserId, choices, deadline: Date.now() + TOWER_CHOICE_MS };
-    broadcastRaw(room, { type: 'choose_tower', chooserId, choices: towerChoiceList(choices), deadlineMs: TOWER_CHOICE_MS });
+// Everyone who reached the top votes on the next tower, weighted by how they
+// placed: three votes for first, two for second, one for everyone else who made
+// it. Nobody finished? Nobody votes, and the next tower is drawn at random.
+function voteWeight(place) {
+    return VOTE_WEIGHTS[place - 1] || 1;
 }
 
-function resolveTowerChoice(room, towerId) {
-    const pending = room.pendingChoice;
-    room.pendingChoice = null;
-    const valid = pending && pending.choices.some((c) => c.id === towerId);
-    const chosenId = valid ? towerId : (pending ? pending.choices[Math.floor(Math.random() * pending.choices.length)].id : randomTowerId());
+function beginTowerVote(room) {
+    const choices = randomTowerChoices(TOWER_CHOICE_OPTIONS);
+    const weights = {};
+    for (const f of room.finishers) weights[f.id] = voteWeight(f.place);
+
+    room.phase = 'choosing';
+    room.pendingVote = {
+        choices,
+        weights,
+        votes: new Map(),                              // player id -> tower id
+        deadline: Date.now() + TOWER_CHOICE_MS,
+    };
+    broadcastRaw(room, {
+        type: 'tower_vote',
+        choices: towerChoiceList(choices),
+        weights,
+        deadlineMs: TOWER_CHOICE_MS,
+    });
+}
+
+function voteTally(pending) {
+    const tally = {};
+    for (const c of pending.choices) tally[c.id] = 0;
+    for (const [id, towerId] of pending.votes.entries()) {
+        if (tally[towerId] === undefined) continue;
+        tally[towerId] += pending.weights[id] || 0;
+    }
+    return tally;
+}
+
+function castVote(room, id, towerId) {
+    const pending = room.pendingVote;
+    if (!pending || !pending.weights[id]) return;      // didn't finish, doesn't vote
+    if (!pending.choices.some((c) => c.id === towerId)) return;
+
+    pending.votes.set(id, towerId);
+    broadcastRaw(room, { type: 'vote_tally', tally: voteTally(pending), voted: Array.from(pending.votes.keys()) });
+
+    // Everyone entitled to vote has voted — no need to run the clock down.
+    const eligible = Object.keys(pending.weights).filter((key) => room.players.has(Number(key)));
+    if (eligible.every((key) => pending.votes.has(Number(key)))) resolveTowerVote(room);
+}
+
+function resolveTowerVote(room) {
+    const pending = room.pendingVote;
+    room.pendingVote = null;
+    if (!pending) {
+        applyTowerChange(room, randomTowerId());
+        resetToLobby(room);
+        return;
+    }
+
+    const tally = voteTally(pending);              // read it before it's cleared
+    let best = 0;
+    for (const id of Object.keys(tally)) best = Math.max(best, tally[id]);
+
+    // No votes at all (nobody finished, or nobody bothered) means a random pick;
+    // a tie is settled the same way, among whichever towers tied.
+    const winners = best > 0
+        ? Object.keys(tally).filter((id) => tally[id] === best).map(Number)
+        : pending.choices.map((c) => c.id);
+    const chosenId = winners[Math.floor(Math.random() * winners.length)];
+
+    broadcastRaw(room, { type: 'vote_result', towerId: chosenId, tally });
     applyTowerChange(room, chosenId);
     resetToLobby(room);
 }
 
+// The round runs its full length: reaching the top finishes you, it doesn't end
+// it for everyone else. Whoever else makes it before the clock runs out still
+// gets their name on the board — and a say in the next tower.
 function stepRound(room) {
     if (room.kind !== 'main') return;
 
     if (room.phase === 'choosing') {
-        if (room.pendingChoice && Date.now() >= room.pendingChoice.deadline) resolveTowerChoice(room, null);
+        if (room.pendingVote && Date.now() >= room.pendingVote.deadline) resolveTowerVote(room);
         return;
     }
 
@@ -403,33 +477,50 @@ function stepRound(room) {
     const now = Date.now();
 
     for (const [id, { player }] of room.players.entries()) {
-        if (isImmune(player)) continue; // ghosts and flying admins can't win
+        if (isImmune(player)) continue;               // ghosts, flying admins, already finished
         if (player.position.y < WIN_HEIGHT) continue;
 
         const secondsLeft = Math.max(0, (room.roundEndAt - now) / 1000);
-        broadcastRaw(room, { type: 'round_result', winner: id, secondsLeft });
-        recordWin(secondsLeft);
-        payOutWin(room, id, secondsLeft);
-        beginTowerChoice(room, id);
-        return;
+        const place = room.finishers.length + 1;
+        player.finished = true;
+        room.finishers.push({ id, place, secondsLeft });
+
+        broadcastRaw(room, { type: 'finish', id, place, secondsLeft });
+        if (place === 1) recordWin(secondsLeft);
+        payOutFinish(room, id, place, secondsLeft);
     }
 
-    if (now >= room.roundEndAt) {
-        broadcastRaw(room, { type: 'round_result', winner: null, secondsLeft: 0 });
-        resetToLobby(room);
+    // Nobody left still climbing, or the clock ran out.
+    const stillClimbing = Array.from(room.players.values())
+        .some(({ player }) => !player.finished && !player.ghost);
+    if (now >= room.roundEndAt || (room.finishers.length > 0 && !stillClimbing)) {
+        endRound(room);
     }
 }
 
-// Winning pays out, and a fast win pays a little more. The profile is pushed
-// straight back to that player so the shop and the coin counter update without
-// them having to reconnect.
-function payOutWin(room, id, secondsLeft) {
+function endRound(room) {
+    const winner = room.finishers.length ? room.finishers[0].id : null;
+    broadcastRaw(room, {
+        type: 'round_result',
+        winner,
+        secondsLeft: room.finishers.length ? room.finishers[0].secondsLeft : 0,
+        finishers: room.finishers.map((f) => ({ id: f.id, place: f.place })),
+    });
+    beginTowerVote(room);
+}
+
+// Finishing pays out — winning pays more, and winning quickly pays a little
+// more again. The profile is pushed straight back to that player so the shop
+// and the coin counter update without them having to reconnect.
+function payOutFinish(room, id, place, secondsLeft) {
     const entry = room.players.get(id);
     if (!entry) return;
     const conn = connections.get(entry.ws);
     if (!conn || !conn.playerKey) return;
 
-    const coins = COINS_PER_WIN + (secondsLeft > FAST_WIN_SECONDS ? COINS_FAST_WIN_BONUS : 0);
+    const coins = place === 1
+        ? COINS_PER_WIN + (secondsLeft > FAST_WIN_SECONDS ? COINS_FAST_WIN_BONUS : 0)
+        : COINS_PER_FINISH;
     awardCoins(conn.playerKey, coins).then((profile) => {
         conn.profile = profile;
         applyKit(entry.player, profile);
@@ -785,6 +876,16 @@ wss.on('connection', (ws, req) => {
     ws.send(JSON.stringify({ type: 'rooms', rooms: roomsSnapshot(), towerPool: TOWER_POOL.map((t) => ({ id: t.id, name: t.name })) }));
 
     ws.on('message', (raw) => {
+        try {
+            handleMessage(ws, raw);
+        } catch (err) {
+            // One malformed or unlucky message shouldn't take the server down
+            // and drop everyone mid-climb.
+            console.error('Error handling message:', err);
+        }
+    });
+
+    function handleMessage(ws, raw) {
         let msg;
         try { msg = JSON.parse(raw); } catch { return; }
         const conn = connections.get(ws);
@@ -907,10 +1008,10 @@ wss.on('connection', (ws, req) => {
             return;
         }
 
-        if (msg.type === 'choose_next_tower') {
+        if (msg.type === 'vote_tower') {
             const room = conn.room;
-            if (!room || !room.pendingChoice || room.pendingChoice.chooserId !== conn.playerId) return;
-            resolveTowerChoice(room, Number(msg.towerId));
+            if (!room || conn.playerId == null) return;
+            castVote(room, conn.playerId, Number(msg.towerId));
             return;
         }
 
@@ -1015,7 +1116,7 @@ wss.on('connection', (ws, req) => {
             }
             return;
         }
-    });
+    }
 
     ws.on('close', () => {
         const conn = connections.get(ws);
