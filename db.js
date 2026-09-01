@@ -20,6 +20,11 @@ if (process.env.DATABASE_URL) {
             wins INTEGER NOT NULL DEFAULT 0,
             updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
         )
+    `)).then(() => pool.query(`
+        CREATE TABLE IF NOT EXISTS admin_tokens (
+            token TEXT PRIMARY KEY,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        )
     `)).catch((err) => {
         console.error('Failed to set up tables in Neon:', err.message);
     });
@@ -129,4 +134,41 @@ async function buyItem(key, item, price) {
     }
 }
 
-module.exports = { recordWin, getProfile, awardCoins, buyItem };
+// Lets a browser stay logged in as admin (across reloads and server
+// restarts) after it has once typed the real ADMIN_CODE, without ever
+// storing or checking the code itself here.
+async function saveAdminToken(token) {
+    if (!pool) return false;
+    try {
+        await ready;
+        await pool.query('INSERT INTO admin_tokens (token) VALUES ($1) ON CONFLICT DO NOTHING', [token]);
+        return true;
+    } catch (err) {
+        console.error('Failed to save admin token in Neon:', err.message);
+        return false;
+    }
+}
+
+async function isAdminToken(token) {
+    if (!pool || typeof token !== 'string' || !token) return false;
+    try {
+        await ready;
+        const result = await pool.query('SELECT 1 FROM admin_tokens WHERE token = $1', [token]);
+        return result.rowCount > 0;
+    } catch (err) {
+        console.error('Failed to check admin token in Neon:', err.message);
+        return false;
+    }
+}
+
+async function revokeAdminToken(token) {
+    if (!pool || typeof token !== 'string' || !token) return;
+    try {
+        await ready;
+        await pool.query('DELETE FROM admin_tokens WHERE token = $1', [token]);
+    } catch (err) {
+        console.error('Failed to revoke admin token in Neon:', err.message);
+    }
+}
+
+module.exports = { recordWin, getProfile, awardCoins, buyItem, saveAdminToken, isAdminToken, revokeAdminToken };

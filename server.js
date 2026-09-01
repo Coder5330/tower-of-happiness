@@ -5,7 +5,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { buildObjects, advanceMovingPlatforms, createPlayer, resolveMovement, resolvePush, applyPendingMove, applyDismounts, respawnPlayer, hitTestFor, refuelRockets, ROCKET_FUEL_TICKS } = require('./physics');
 const { SPAWN_POSITION, TOWER_HEIGHT, GROUND_AREA, PLAYER_SIZE } = require('./levels');
-const { recordWin, getProfile, awardCoins, buyItem } = require('./db');
+const { recordWin, getProfile, awardCoins, buyItem, saveAdminToken, isAdminToken, revokeAdminToken } = require('./db');
 const { TOWER_POOL, buildTowerLevel, warmTowerPool, randomTowerId, randomTowerChoices } = require('./towers');
 
 const PORT = process.env.PORT || 8080;
@@ -876,16 +876,14 @@ wss.on('connection', (ws, req) => {
     ws.send(JSON.stringify({ type: 'rooms', rooms: roomsSnapshot(), towerPool: TOWER_POOL.map((t) => ({ id: t.id, name: t.name })) }));
 
     ws.on('message', (raw) => {
-        try {
-            handleMessage(ws, raw);
-        } catch (err) {
+        handleMessage(ws, raw).catch((err) => {
             // One malformed or unlucky message shouldn't take the server down
             // and drop everyone mid-climb.
             console.error('Error handling message:', err);
-        }
+        });
     });
 
-    function handleMessage(ws, raw) {
+    async function handleMessage(ws, raw) {
         let msg;
         try { msg = JSON.parse(raw); } catch { return; }
         const conn = connections.get(ws);
@@ -1072,14 +1070,30 @@ wss.on('connection', (ws, req) => {
             if (ok) {
                 authState.fails = 0;
                 entry.player.admin.authed = true;
+                const token = crypto.randomBytes(24).toString('hex');
+                const saved = await saveAdminToken(token);
+                ws.send(JSON.stringify({ type: 'admin_auth_result', ok: true, token: saved ? token : null }));
             } else {
                 authState.fails++;
                 if (authState.fails >= AUTH_MAX_FAILS) {
                     authState.lockUntil = now + AUTH_LOCKOUT_MS;
                     authState.fails = 0;
                 }
+                ws.send(JSON.stringify({ type: 'admin_auth_result', ok: false }));
             }
-            ws.send(JSON.stringify({ type: 'admin_auth_result', ok }));
+            return;
+        }
+
+        if (msg.type === 'admin_token_auth') {
+            const ok = await isAdminToken(msg.token);
+            if (ok) entry.player.admin.authed = true;
+            ws.send(JSON.stringify({ type: 'admin_auth_result', ok, silent: true }));
+            return;
+        }
+
+        if (msg.type === 'admin_logout') {
+            if (typeof msg.token === 'string' && msg.token) revokeAdminToken(msg.token);
+            entry.player.admin.authed = false;
             return;
         }
 
