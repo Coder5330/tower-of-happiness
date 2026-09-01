@@ -200,23 +200,24 @@ function applyDismounts(playerList) {
     }
 }
 
-// Rocket boosters: holding jump in mid-air burns fuel to fight gravity, taking
-// a jump's apex from ~2.6 to ~5.6. Deliberately not flight — velocity is capped
-// below the jump's own, each jump can only burn so long, and the round's fuel
-// is two boosts' worth. Without the per-jump cap one continuous hold just flies
-// to the top of the tower (measured: +22.9, which is a third of the climb).
-const ROCKET_THRUST = 0.019;
-const ROCKET_MAX_VEL = 0.23;
-const ROCKET_BURN_PER_JUMP = 18;
-const ROCKET_FUEL_TICKS = ROCKET_BURN_PER_JUMP * 2;
+// Rocket boosters: a player-activated flight mode (hold the boost key), not
+// something that quietly piggybacks on the jump key — the whole point is that
+// the player chooses exactly when to spend it, e.g. to line up a precision
+// landing, rather than it auto-burning through every ordinary jump. Same
+// speed as walking/admin-fly's un-multiplied rate; fuel is a flat per-tick
+// drain while boosting, refilled once a round like the old mechanic.
+const ROCKET_FLY_SPEED = PLAYER_SPEED;
+const ROCKET_FUEL_TICKS = 60 * 6; // 6 seconds of flight per round
 
 function resolveMovement(player, objects, keys, otherPlayers) {
     const admin = player.admin;
 
-    if ((admin && admin.fly) || player.ghost) {
+    const rocketFlying = !!(player.rocket && keys.boost && player.rocket.fuel > 0);
+
+    if ((admin && admin.fly) || player.ghost || rocketFlying) {
         const forward = { x: -Math.sin(player.angleY), z: -Math.cos(player.angleY) };
         const right = { x: Math.cos(player.angleY), z: -Math.sin(player.angleY) };
-        const flySpeed = PLAYER_SPEED * (admin ? admin.speedMult : 1);
+        const flySpeed = admin ? PLAYER_SPEED * admin.speedMult : (rocketFlying ? ROCKET_FLY_SPEED : PLAYER_SPEED);
 
         let dx = 0, dy = 0, dz = 0;
         if (keys.w) { dx += forward.x * flySpeed; dz += forward.z * flySpeed; }
@@ -229,9 +230,12 @@ function resolveMovement(player, objects, keys, otherPlayers) {
         player.y_vel = 0;
         player.on_ground = false;
         player.ridingPlatform = null;
+        player.boosting = rocketFlying;
+        if (rocketFlying) player.rocket.fuel--;
         player.pendingDelta = { x: dx, y: dy, z: dz };
         return;
     }
+    player.boosting = false;
 
     if (player.ridingPlatform && player.ridingPlatform.frameDelta) {
         player.position.x += player.ridingPlatform.frameDelta.x;
@@ -252,19 +256,6 @@ function resolveMovement(player, objects, keys, otherPlayers) {
     if (keys.d) { dx += right.x * speed; dz += right.z * speed; }
     if (keys.a) { dx -= right.x * speed; dz -= right.z * speed; }
     if (keys.jump && player.on_ground) player.y_vel = jumpVelocity;
-
-    // on_ground still reflects last tick here, so this only fires in mid-air.
-    player.boosting = false;
-    if (player.rocket) {
-        if (player.on_ground) player.rocket.burn = 0;   // a fresh jump, a fresh burn
-        if (keys.jump && !player.on_ground && player.rocket.fuel > 0 &&
-            (player.rocket.burn || 0) < ROCKET_BURN_PER_JUMP) {
-            player.y_vel = Math.min(ROCKET_MAX_VEL, player.y_vel + ROCKET_THRUST);
-            player.rocket.fuel--;
-            player.rocket.burn = (player.rocket.burn || 0) + 1;
-            player.boosting = true;
-        }
-    }
 
     player.y_vel -= gravity;
     if (player.y_vel < TERMINAL_VELOCITY) player.y_vel = TERMINAL_VELOCITY;
@@ -377,7 +368,7 @@ function resolvePush(player, pushDelta, objects, otherPlayers) {
 }
 
 function refuelRockets(player) {
-    if (player.rocket) { player.rocket.fuel = ROCKET_FUEL_TICKS; player.rocket.burn = 0; }
+    if (player.rocket) player.rocket.fuel = ROCKET_FUEL_TICKS;
 }
 
 function respawnPlayer(player) {

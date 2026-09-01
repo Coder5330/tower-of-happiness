@@ -533,7 +533,7 @@ function applyKit(player, profile) {
     const items = (profile && profile.items) || [];
     player.hasGlove = items.includes('glove');
     player.hasHat = items.includes('hat');
-    player.rocket = items.includes('rockets') ? { fuel: ROCKET_FUEL_TICKS, burn: 0 } : null;
+    player.rocket = items.includes('rockets') ? { fuel: ROCKET_FUEL_TICKS } : null;
     if (!items.includes('banana')) player.bananasLeft = 0;
 }
 
@@ -849,7 +849,7 @@ const connections = new Map();
 function addPlayerToRoom(ws, conn, room) {
     const id = room.freeIds.length ? room.freeIds.shift() : room.nextId++;
     const player = createPlayer();
-    player.keys = { w: false, a: false, s: false, d: false, jump: false, down: false };
+    player.keys = { w: false, a: false, s: false, d: false, jump: false, down: false, boost: false };
     applyKit(player, conn.profile);
     if (room.kind === 'main' && room.phase === 'playing') player.ghost = true; // late joiner spectates till next round
     room.players.set(id, { ws, player });
@@ -1032,7 +1032,7 @@ wss.on('connection', (ws, req) => {
         if (msg.type === 'input') {
             const k = msg.keys || {};
             entry.player.keys = {
-                w: !!k.w, a: !!k.a, s: !!k.s, d: !!k.d, jump: !!k.jump, down: !!k.down,
+                w: !!k.w, a: !!k.a, s: !!k.s, d: !!k.d, jump: !!k.jump, down: !!k.down, boost: !!k.boost,
             };
             if (typeof msg.angleY === 'number') entry.player.angleY = msg.angleY;
             return;

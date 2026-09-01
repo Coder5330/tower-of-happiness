@@ -304,7 +304,11 @@
   function planMount(me, first) {
     var c = livePos(first);
     var R = airTicks(standY(first) - me.y) * SPEED + 0.2;
-    var clear = halfSpan(first) + 0.9;
+    // Only the platform's actual footprint blocks headroom - a wider buffer
+    // sounds safer but, once the bot ends up anywhere within it (a missed
+    // jump can easily drop it back near the platform it aimed at), rejects
+    // every candidate's approach path and leaves no way out at all.
+    var clear = halfSpan(first) + 0.3;
     var best = null;
     for (var k = 0; k < 4; k++) {
       var a = k * Math.PI / 2;
@@ -576,10 +580,28 @@
   }
 
   // Walk to a point and stop on it. State arrives at 30 Hz, so holding w to
-  // the last centimetre overshoots; past 0.45 units it holds w, inside that
-  // it taps w in ~1-tick pulses and re-reads the position between taps.
+  // the last centimetre overshoots; inside the close-range threshold it taps
+  // w in ~1-tick pulses and re-reads the position between taps instead.
   var appr = { pulses: 0, pulseT: 0, on: false };
   function resetApproach() { appr.pulses = 0; appr.pulseT = 0; appr.on = false; }
+
+  // Walking at full speed while still badly misaligned is a pure-pursuit trap:
+  // aiming straight at a target and moving toward it every tick, without ever
+  // finishing the turn first, makes the bot overshoot past the target and
+  // re-aim almost 180 degrees around - forever circling instead of arriving.
+  // So turn in place until roughly facing the target, and only then walk.
+  var APPROACH_ALIGN_TOL = 0.3; // ~17 degrees
+
+  // At full speed the tightest circle the bot can complete has radius
+  // speed/turnRate - inside that distance, no amount of turning-then-walking
+  // can tighten the arc enough to actually reach the target: it just orbits
+  // at a stable radius forever, always slightly to one side. So the careful
+  // close-range approach (tap w, re-check between taps) has to start further
+  // out than that minimum turning radius, not just at some fixed distance
+  // that might sit inside the danger zone.
+  function closeRangeThreshold() {
+    return Math.max(0.45, (SPEED / B.cfg.turnRate) * 1.5);
+  }
 
   // Returns true once it has arrived - and then deliberately sends nothing, so
   // the caller owns the heading from that point on. Two send() calls in one
@@ -588,12 +610,21 @@
     var d = Math.hypot(tgt.x - me.x, tgt.z - me.z);
     var ang = faceAngle(me, tgt);
     if (d <= tol) return true;
-    if (d > 0.45) { resetApproach(); send(true, false, ang); return false; }
+    if (d > closeRangeThreshold()) {
+      resetApproach();
+      var aligned = Math.abs(normAng(ang - curAng)) <= APPROACH_ALIGN_TOL;
+      send(aligned, false, ang);
+      return false;
+    }
     var t = performance.now();
     if (t - appr.pulseT > 70) { appr.pulseT = t; appr.on = true; appr.pulses++; }
     else if (appr.on && t - appr.pulseT > 25) { appr.on = false; }
     if (appr.pulses > 20) return true;                 // close enough; stop fiddling
-    send(appr.on, false, ang);
+    // Same trap as the far-range case, just gentler: a pulse aimed the wrong
+    // way still nudges the bot sideways of the target. Only pulse forward
+    // once roughly facing it - turning happens every call regardless.
+    var pulseAligned = Math.abs(normAng(ang - curAng)) <= APPROACH_ALIGN_TOL;
+    send(appr.on && pulseAligned, false, ang);
     return false;
   }
 
@@ -785,15 +816,43 @@
         var first = B.path[0];
         if (!J.mountPt) {
           J.mountPt = planMount(me, first);
-          if (!J.mountPt) { idle(); return; }         // nothing reachable; wait for a retry
+          if (!J.mountPt) {
+            // Nothing reachable from right here - most likely standing too
+            // close under the platform for any approach path to clear it.
+            // Step straight away from it until there's room to plan from,
+            // rather than waiting in a spot no plan will ever come from.
+            var away = livePos(first);
+            var adx = me.x - away.x, adz = me.z - away.z;
+            var add = Math.hypot(adx, adz);
+            var dir = add > 0.05 ? { x: adx / add, z: adz / add } : { x: 1, z: 0 };
+            approach(me, { x: me.x + dir.x * 2, z: me.z + dir.z * 2 }, 0.3);
+            return;
+          }
         }
         if (approach(me, J.mountPt, 0.12)) {
-          var mAim = faceAngle(me, livePos(first));
-          if (!aligned(mAim)) { send(false, false, mAim); return; }
-          S.target = 0;
-          J.angle = mAim;
+          // planMount only verified the *destination* it picked, not the jump
+          // taken from wherever `approach` actually stopped (which can be a
+          // few centimetres off, and these jumps are precise enough that a
+          // few centimetres is the difference between landing and missing).
+          // Re-simulate from the real spot, with the same angle fan every
+          // other jump in the climb gets, instead of a raw dead-reckoned aim.
+          var mBase = faceAngle(me, livePos(first));
+          var mOk = bestJump(me, mBase, AIM_FAN, B.cfg.lagTicks, 0);
+          if (!mOk) {
+            // The exact verified spot doesn't reproduce from here - clear it
+            // and let planMount pick again (a fresh best.cost avoids retrying
+            // the same one thanks to mountAvoid) rather than force a jump
+            // that's already known not to work.
+            J.mountAvoid = J.mountPt;
+            J.mountPt = null;
+            idle();
+            return;
+          }
+          if (!aligned(mOk.angle)) { send(false, false, mOk.angle); return; }
+          S.target = mOk.step;
+          J.angle = mOk.angle;
           J.tJump = performance.now();
-          J.estMs = airTicks(standY(first) - me.y) * TICK_MS;
+          J.estMs = mOk.ticks * TICK_MS;
           J.mountUsed = J.mountPt;
           J.mountPt = null;
           S.jumps++;
@@ -1059,6 +1118,12 @@
     AP.result = null;
     AP.running = true;
     if (!AP.timer) AP.timer = setInterval(tick, 16);
+    // Every jump this bot commits to is simulated t0 + lagTicks ticks ahead of
+    // "now" to land on the moment the input actually takes effect server-side
+    // - with the wrong lagTicks that moment is wrong too, and a jump that was
+    // simulated to land dead-centre lands short or long instead. Calibrate it
+    // from the real connection instead of trusting the untested default.
+    B.measureLag();
     if (AP.log) AP.log('autoplay ON - ' + AP.path.length + ' platforms to the top');
     return true;
   };

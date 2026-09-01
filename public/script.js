@@ -208,7 +208,7 @@ function drawKitHUD(x, y) {
         hudCtx.strokeRect(x, line, w, h);
         hudCtx.fillStyle = '#fff';
         hudCtx.font = 'bold 11px sans-serif';
-        hudCtx.fillText('BOOST', x + w + 8, line + h);
+        hudCtx.fillText('FLY (R)', x + w + 8, line + h);
         line += h + 16;
     }
 
@@ -314,7 +314,7 @@ const ITEM_NOTES = {
     hat: 'A party hat. Does nothing whatsoever.',
     banana: 'Three peels a round, dropped with Q. Catches anyone who walks over one — including you.',
     glove: 'Punch other climbers off the tower. Click to swing.',
-    rockets: 'Hold jump in mid-air to burn fuel and roughly double your jump. Enough for about two a round.',
+    rockets: 'Hold R to fly — full control, no gravity — while fuel lasts. About 6 seconds a round.',
 };
 
 function renderShop() {
@@ -984,10 +984,13 @@ function sendInput() {
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
     if (window.Autoplay && Autoplay.isRunning()) return;   // autoplay sends its own
     const payload = consoleOpen
-        ? { type: 'input', keys: { w: false, a: false, s: false, d: false, jump: false, down: false }, angleY }
+        ? { type: 'input', keys: { w: false, a: false, s: false, d: false, jump: false, down: false, boost: false }, angleY }
         : {
               type: 'input',
-              keys: { w: !!keys['w'], a: !!keys['a'], s: !!keys['s'], d: !!keys['d'], jump: !!keys[' '], down: !!keys['Shift'] },
+              keys: {
+                  w: !!keys['w'], a: !!keys['a'], s: !!keys['s'], d: !!keys['d'],
+                  jump: !!keys[' '], down: !!keys['Shift'], boost: !!keys['r'],
+              },
               angleY,
           };
     const serialized = JSON.stringify(payload);
