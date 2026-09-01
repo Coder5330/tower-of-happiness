@@ -296,9 +296,18 @@ function growPath(rand, margin) {
             continue;
         }
 
+        // Every moving platform in a room runs on the exact same clock, so
+        // jumping straight from one onto another can never actually work:
+        // by the time a rider reaches the first one's far end, the second
+        // has simultaneously reached its own far end too, never its near
+        // one (where the jump was "verified" to land) — the fresh-build
+        // check below can't see this, since it always resets every
+        // platform to the start of its cycle. So a moving platform is only
+        // ever placed after a regular (or standing-still) one.
+        const canBeMoving = prev.special !== 'moving';
         let next = null;
         for (let attempt = 0; attempt < PLACEMENT_ATTEMPTS; attempt++) {
-            const candidate = (roll < 0.3 && attempt < 2)
+            const candidate = (roll < 0.3 && attempt < 2 && canBeMoving)
                 ? (pickMovingTarget(rand, margin, from, others) || pickJumpTarget(rand, margin, from, others))
                 : pickJumpTarget(rand, margin, from, others);
             if (!candidate) break;
@@ -327,6 +336,12 @@ function takeoffPoint(prevEntry) {
 
 function stepVerifies(path, hazards, i) {
     const to = path[i];
+    // A moving platform jumped to directly from another moving platform is
+    // never actually reachable (see the note in growPath) — the ordinary
+    // jump/ride simulation below can't detect that on its own, since it
+    // always resets every platform to the start of its cycle, so it's
+    // called out here explicitly as its own failure.
+    if (to.special === 'moving' && path[i - 1].special === 'moving') return false;
     const from = takeoffPoint(path[i - 1]);
     if (!simulateJump(buildObjects(walls().concat(path, hazards)), from, to, 80)) return false;
     if (to.special === 'moving' && !simulateRide(buildObjects(walls().concat(path, hazards)), to, 140)) return false;
@@ -338,10 +353,11 @@ function regeneratePlatform(rand, margin, path, hazards, i) {
 
     const from = takeoffPoint(path[i - 1]);
     const others = walls().concat(path.filter((_, idx) => idx !== i), hazards);
+    const canBeMoving = path[i - 1].special !== 'moving';
 
     const replacement = path[i].summit
         ? pickSummit(rand, margin, from, others)
-        : (path[i].special === 'moving'
+        : (path[i].special === 'moving' && canBeMoving
             ? (pickMovingTarget(rand, margin, from, others) || pickJumpTarget(rand, margin, from, others))
             : pickJumpTarget(rand, margin, from, others));
     if (!replacement) return false;
@@ -399,6 +415,15 @@ function towerFailures(levelData) {
         const to = climbable[i + 1];
         if (from.special === 'moving' && !simulateRide(buildObjects(levelData), from, 260)) {
             failures.push({ index: i, kind: 'ride', from, to });
+        }
+        // See the note in growPath: a moving platform jumped to directly
+        // from another moving platform is never actually reachable, since
+        // every moving platform in a room shares one global clock. This
+        // wouldn't be caught by simulateJump below on its own, which
+        // always resets every platform to the start of its cycle.
+        if (to.special === 'moving' && from.special === 'moving') {
+            failures.push({ index: i + 1, kind: 'chained-moving', from, to, takeoff: takeoffPoint(from) });
+            continue;
         }
         const takeoff = takeoffPoint(from);
         if (!simulateJump(buildObjects(levelData), takeoff, to, 200)) {
